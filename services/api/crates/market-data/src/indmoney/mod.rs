@@ -12,6 +12,7 @@ pub mod oauth;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::future::try_join_all;
@@ -19,7 +20,7 @@ use serde_json::{json, Map, Value};
 use swing_core::Candle;
 use tokio::sync::RwLock;
 
-use crate::mcp::{McpClient, TokenSource};
+use crate::mcp::{snippet, McpClient, TokenSource};
 use crate::{names, Error, Interval, MarketData, Quote, Result};
 
 pub use oauth::{login, token_source, FileTokenSource, LoginOptions, StoredToken};
@@ -35,6 +36,11 @@ const MAX_KEYS_PER_CALL: usize = 10;
 const MAX_NAMES_PER_CALL: usize = 10;
 /// IST is UTC+05:30.
 const IST_OFFSET_SECS: i64 = 19_800;
+/// INDmoney allows 60 cost units per minute across all tools (OHLC costs 2).
+/// A throttled call is retried this many times...
+const RATE_LIMIT_RETRIES: u32 = 2;
+/// ...when the server asks to wait no longer than this.
+const MAX_RATE_LIMIT_WAIT_SECS: u64 = 5;
 
 /// Quotes and candles from INDmoney. Read-only; never places orders.
 pub struct IndmoneyProvider {
@@ -50,6 +56,39 @@ impl IndmoneyProvider {
             mcp: McpClient::new(ID, mcp_url, tokens)?,
             keys: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Calls an MCP tool, waiting out short rate-limit replies. Any other
+    /// error object becomes [`Error::Upstream`], so it is never mistaken for
+    /// an empty result (which would turn into "symbol not found").
+    async fn call(&self, tool: &str, arguments: Value) -> Result<Value> {
+        let mut retries = 0;
+        loop {
+            let v = self.mcp.call_tool(tool, arguments.clone()).await?;
+            match tool_error(&v) {
+                None => return Ok(v),
+                Some(ToolError::RateLimited {
+                    retry_after,
+                    message,
+                }) if retries < RATE_LIMIT_RETRIES && retry_after <= MAX_RATE_LIMIT_WAIT_SECS => {
+                    retries += 1;
+                    tracing::debug!(tool, retry_after, %message, "INDmoney rate limit; waiting");
+                    tokio::time::sleep(Duration::from_secs(retry_after.max(1))).await;
+                }
+                Some(ToolError::RateLimited { message, .. }) => {
+                    return Err(Error::Upstream {
+                        provider: ID,
+                        message: format!("{tool} rate limited: {message}"),
+                    })
+                }
+                Some(ToolError::Other(message)) => {
+                    return Err(Error::Upstream {
+                        provider: ID,
+                        message: format!("{tool} failed: {message}"),
+                    })
+                }
+            }
+        }
     }
 
     /// Resolves upper-case symbols to ind_keys. Unknown symbols are left out.
@@ -104,7 +143,7 @@ impl IndmoneyProvider {
     async fn resolve_round(&self, queries: &[(String, String)]) -> Result<HashMap<String, String>> {
         let search: Vec<&str> = queries.iter().map(|(_, q)| q.as_str()).collect();
         let lookups = try_join_all(search.chunks(MAX_NAMES_PER_CALL).map(|chunk| {
-            self.mcp.call_tool(
+            self.call(
                 "lookup_ind_keys",
                 json!({ "names": chunk, "filter_type": "IN_STOCKS" }),
             )
@@ -129,10 +168,10 @@ impl IndmoneyProvider {
 
     /// `get_indian_stocks_details` for any number of keys, merged into one map.
     async fn details(&self, keys: &[String]) -> Result<Map<String, Value>> {
-        let parts = try_join_all(keys.chunks(MAX_KEYS_PER_CALL).map(|chunk| {
-            self.mcp
-                .call_tool("get_indian_stocks_details", json!({ "ind_keys": chunk }))
-        }))
+        let parts = try_join_all(
+            keys.chunks(MAX_KEYS_PER_CALL)
+                .map(|chunk| self.call("get_indian_stocks_details", json!({ "ind_keys": chunk }))),
+        )
         .await?;
         let mut out = Map::new();
         for part in parts {
@@ -150,6 +189,9 @@ impl IndmoneyProvider {
                         None => out.extend(map),
                     }
                 }
+                // Plain text instead of JSON is how the server reports problems
+                // such as rate limits; fail so the fallback provider says why.
+                Value::String(text) => return Err(text_reply("get_indian_stocks_details", &text)),
                 other => tracing::warn!(response = %other, "unexpected details response"),
             }
         }
@@ -194,7 +236,11 @@ impl MarketData for IndmoneyProvider {
             .filter_map(|(symbol, key)| {
                 let quote = details.get(key).and_then(|d| parse_quote(symbol, d));
                 if quote.is_none() {
-                    tracing::warn!(%symbol, %key, "INDmoney returned no usable quote");
+                    let reply = details.get(key).map_or_else(
+                        || "no entry for this key".to_owned(),
+                        |d| snippet(&d.to_string()),
+                    );
+                    tracing::warn!(%symbol, %key, %reply, "INDmoney returned no usable quote");
                 }
                 quote
             })
@@ -209,14 +255,51 @@ impl MarketData for IndmoneyProvider {
             .ok_or_else(|| Error::NotFound(symbol.clone()))?;
         let (iv, lookback) = interval.indmoney_params();
         let v = self
-            .mcp
-            .call_tool(
+            .call(
                 "get_indian_stocks_ohlc",
                 json!({ "ind_key": key, "interval": iv, "lookback": lookback }),
             )
             .await?;
         parse_candles(&v)
     }
+}
+
+/// An error reported inside a successful `tools/call` result.
+#[derive(Debug, PartialEq)]
+enum ToolError {
+    /// `{"error":"rate_limit_exceeded","retry_after_seconds":1,"message":...}`
+    RateLimited {
+        retry_after: u64,
+        message: String,
+    },
+    Other(String),
+}
+
+/// Recognises a top-level `{"error": "...", "message": "..."}` reply.
+/// Data replies are arrays, ind_key maps or objects with `candles`.
+fn tool_error(v: &Value) -> Option<ToolError> {
+    let map = v.as_object()?;
+    let code = map.get("error")?.as_str()?;
+    if map.contains_key("candles") || map.keys().any(|k| looks_like_key(k)) {
+        return None;
+    }
+    let message = map
+        .get("message")
+        .and_then(Value::as_str)
+        .unwrap_or(code)
+        .to_owned();
+    Some(if code == "rate_limit_exceeded" {
+        let retry_after = map
+            .get("retry_after_seconds")
+            .and_then(Value::as_u64)
+            .unwrap_or(1);
+        ToolError::RateLimited {
+            retry_after,
+            message,
+        }
+    } else {
+        ToolError::Other(message)
+    })
 }
 
 /// True for strings shaped like an ind_key (`INDS03131`, `INDI00339`).
@@ -354,15 +437,29 @@ fn parse_ist(s: &str) -> Option<i64> {
     Some(naive.and_utc().timestamp() - IST_OFFSET_SECS)
 }
 
+/// A tool answered with text instead of JSON (e.g. a rate-limit notice).
+fn text_reply(tool: &str, text: &str) -> Error {
+    Error::Upstream {
+        provider: ID,
+        message: format!("{tool} replied: {}", snippet(text)),
+    }
+}
+
 /// Parses a `get_indian_stocks_ohlc` response into candles, oldest first.
 fn parse_candles(v: &Value) -> Result<Vec<Candle>> {
+    if let Value::String(text) = v {
+        return Err(text_reply("get_indian_stocks_ohlc", text));
+    }
     let rows = v
         .get("candles")
         .and_then(Value::as_array)
         .or_else(|| v.as_array())
         .ok_or_else(|| Error::Decode {
             provider: ID,
-            message: "OHLC response has no candles array".to_owned(),
+            message: format!(
+                "OHLC response has no candles array: {}",
+                snippet(&v.to_string())
+            ),
         })?;
 
     let mut skipped = 0usize;
@@ -438,6 +535,10 @@ mod tests {
         assert_eq!(candles[1].ts, 1_762_819_200 + 86_400);
         assert_eq!(candles[1].volume, 1_200.0);
         assert!(parse_candles(&json!({"error": "x"})).is_err());
+        assert!(matches!(
+            parse_candles(&json!("Too many requests, slow down")),
+            Err(Error::Upstream { message, .. }) if message.contains("Too many requests")
+        ));
     }
 
     fn mcx_details() -> Value {
@@ -525,6 +626,31 @@ mod tests {
         let wrapped = json!({"results": [{"ind_key": "INDS1"}]});
         assert_eq!(candidate_keys(&wrapped), vec!["INDS1"]);
         assert!(candidate_keys(&json!("nothing")).is_empty());
+    }
+
+    #[test]
+    fn recognises_tool_errors() {
+        let limited = json!({"cost":2,"current":60,"error":"rate_limit_exceeded","limit":60,
+            "message":"Rate limit exceeded: 60 calls per min. Try again in 2s.",
+            "retry_after_seconds":2,"scope":"global","tool":"get_indian_stocks_ohlc","window":"min"});
+        assert_eq!(
+            tool_error(&limited),
+            Some(ToolError::RateLimited {
+                retry_after: 2,
+                message: "Rate limit exceeded: 60 calls per min. Try again in 2s.".to_owned()
+            })
+        );
+        assert_eq!(
+            tool_error(&json!({"error": "bad_key"})),
+            Some(ToolError::Other("bad_key".to_owned()))
+        );
+        assert_eq!(tool_error(&json!({"candles": [], "error": null})), None);
+        assert_eq!(tool_error(&json!({"INDS1": {"error": "x"}})), None);
+        assert_eq!(
+            tool_error(&json!([{"ind_key": null, "error": "retry"}])),
+            None
+        );
+        assert_eq!(tool_error(&mcx_details()), None);
     }
 
     #[test]
