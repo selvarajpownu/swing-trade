@@ -20,11 +20,15 @@ Done:
   tool costs from the server's rate-limit replies.
 - Golden preset tests on recorded real candles (`swing-core/tests/presets_real.rs`).
 
-Next (owner's order, 10 Nov 2026):
-- Navigation: **IN Stock** (today's list), **US Stock**, **Commodity** (MCX futures), **Stock news**, with layouts
-  inspired by Google Finance (market tabs, big price header with range tabs, two-column stock page, compact news rows).
-- US stocks and MCX commodities through INDmoney's MCP, with the same list, chart, setups and trade plan.
-- Stock news from Google News RSS, fetched and cached by the API (headlines and links; AI summaries stay in phase 4).
+- Navigation: **IN Stock**, **US Stock**, **Commodity** (MCX near-month futures), **Stock news**, with Google
+  Finance-style market tabs and compact news rows. US and MCX have the same list, chart, setups and plan (USD capital
+  for US; no quantity for MCX futures).
+- News: INDmoney headlines with sentiment on each stock page; Google News RSS headlines with links on Stock news.
+
+Next:
+- Universe file for the scanner (e.g. NSE's Nifty 500 CSV); at INDmoney's 500 units/hour a full refresh takes ~3.3 h.
+- Google Finance-style range tabs (1D / 5D / 1M / 6M / YTD / 1Y) on the chart.
+- Scanner for US and MCX (today it scans NSE only).
 
 ## Phase 3 — Data
 

@@ -51,9 +51,10 @@ Windows: `scripts\dev.ps1`. Tests: `cargo test` (services/api), `npm run typeche
 ## Status (10 Nov 2026, first Claude Code session)
 
 **Phase 2 progress (same day):** background scanner (`GET /v1/scan`, `api-server/src/{scan,store,universe}.rs`), Scanner
-page, Home "Top setups" (never "recommended": wording rule), shared INDmoney rate limiter that learns tool costs
-(`market-data/src/rate.rs`), golden preset tests on real candles. Next: IN Stock / US Stock / Commodity / Stock news
-sections (see docs/roadmap.md Phase 2 "Next").
+page, Home "Top setups" (never "recommended": wording rule), shared INDmoney rate limiter (minute + hour windows,
+learns tool costs, fails fast), golden preset tests on real candles; IN Stock / US Stock / Commodity / Stock news
+sections (`market=in|us|mcx`, `Market::key` prefixes `US:`/`MCX:`), INDmoney news per stock, Google News RSS page.
+Next: see docs/roadmap.md Phase 2 "Next".
 
 Phase 1 (list + chart MVP) **builds, passes all checks and runs end to end on real INDmoney data** (Windows 11,
 Rust 1.90, Node 24).
@@ -83,7 +84,9 @@ Open items:
 Known decisions/quirks:
 - INDmoney `lookup_ind_keys` is fuzzy ("ACE" returns AceVector first). The provider fetches details for all
   candidates and keeps the exact `entity_basic.symbol` match, with a company-name fallback in `market-data/src/names.rs`.
-- INDmoney MCP rate limit: **60 cost units/min, global** (OHLC = 2). Throttled calls return a JSON error object
+- INDmoney MCP rate limits: **60 cost units/min and 500/hour, global** (OHLC = 2). Scripted checks burn the hourly
+  budget fast (a burst of tests cost ~17 min of cooldown on 10 Nov). The 500/hour cap means a Nifty 500 scan needs
+  ~3.3 h per day. Throttled calls return a JSON error object
   inside a successful tool result; `IndmoneyProvider::call` waits ≤ 5 s and retries, else `Upstream` → fallback.
   Bursts (e.g. scripted checks of 30 charts) will hit it; normal browsing doesn't.
 - INDmoney access tokens last ~1 h; the stored refresh token renews them automatically.
