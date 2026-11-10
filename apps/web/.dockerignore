@@ -1,0 +1,22 @@
+# Dependencies and build output are recreated inside the image
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Secrets
+.env
+.env.*
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+
+# Editor / OS / tooling noise
+.vercel/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+npm-debug.log*

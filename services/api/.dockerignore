@@ -1,0 +1,22 @@
+# Build output and local state
+target/
+.data/
+**/*.rs.bk
+
+# Secrets
+.env
+.env.*
+
+# The image's own Rust toolchain is used; this file would make rustup
+# download a second toolchain inside the builder.
+rust-toolchain.toml
+
+# Docker files themselves
+Dockerfile
+.dockerignore
+
+# Editor / OS noise
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

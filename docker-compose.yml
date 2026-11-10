@@ -1,0 +1,69 @@
+# Local / single-server stack: Rust API + Next.js web.
+#   cp .env.example .env   (set API_TOKEN)
+#   docker compose up --build
+# Web: http://localhost:3000   API: http://localhost:8080/health
+
+name: swing-trade
+
+services:
+  api:
+    build:
+      context: ./services/api
+    image: swing-trade/api:local
+    env_file: .env
+    environment:
+      # Fixed inside the container regardless of what .env says.
+      BIND_ADDR: 0.0.0.0:8080
+      INDMONEY_TOKEN_FILE: /app/.data/indmoney-token.json
+    ports:
+      - "8080:8080"
+    volumes:
+      # INDmoney OAuth token survives restarts here. On Linux hosts the folder
+      # must be writable by uid 10001: mkdir -p .data && sudo chown 10001 .data
+      - ./.data:/app/.data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    # Phase 3: uncomment once the API talks to Postgres.
+    # depends_on:
+    #   db:
+    #     condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_APP_NAME: ${NEXT_PUBLIC_APP_NAME:-Swing Trade}
+    image: swing-trade/web:local
+    environment:
+      API_URL: http://api:8080
+      API_TOKEN: ${API_TOKEN:?Set API_TOKEN in .env}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Phase 3: Postgres + TimescaleDB for candle history, scans and the journal.
+  # db:
+  #   image: timescale/timescaledb:latest-pg16
+  #   environment:
+  #     POSTGRES_USER: swing
+  #     POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+  #     POSTGRES_DB: swing
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U swing -d swing"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 5
+  #   restart: unless-stopped
+
+# volumes:
+#   pgdata:

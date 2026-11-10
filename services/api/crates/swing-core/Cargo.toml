@@ -1,0 +1,11 @@
+[package]
+name = "swing-core"
+description = "Pure swing-trading analytics: indicators, support/resistance zones, setups and trade plans"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# Deliberately dependency-free: this crate is pure maths over candles,
+# so it compiles and tests anywhere, fast.
+[dependencies]
