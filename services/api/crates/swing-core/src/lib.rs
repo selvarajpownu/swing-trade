@@ -61,8 +61,10 @@ pub struct Analysis {
     pub sma50: Vec<Option<f64>>,
     pub sma200: Vec<Option<f64>>,
     pub zones: Vec<Zone>,
-    /// Best matching setup, if any preset fires.
+    /// Best matching setup, if any preset fires (the first of `setups`).
     pub setup: Option<Setup>,
+    /// Every preset that fires on the latest bar, best score first.
+    pub setups: Vec<Setup>,
 }
 
 /// Bars in roughly one trading year.
@@ -104,7 +106,8 @@ pub fn analyze(candles: &[Candle], params: &AnalysisParams) -> Option<Analysis> 
         None => Vec::new(),
     };
 
-    let setup = setup::detect(candles, &snapshot, &rsi14, &zones, params);
+    let setups = setup::detect_all(candles, &snapshot, &rsi14, &zones, params);
+    let setup = setups.first().cloned();
 
     Some(Analysis {
         snapshot,
@@ -113,5 +116,6 @@ pub fn analyze(candles: &[Candle], params: &AnalysisParams) -> Option<Analysis> 
         sma200,
         zones,
         setup,
+        setups,
     })
 }

@@ -71,8 +71,25 @@ pub fn detect(
     zones: &[Zone],
     params: &AnalysisParams,
 ) -> Option<Setup> {
-    let atr = snap.atr14?;
-    let last = *candles.last()?;
+    detect_all(candles, snap, rsi, zones, params)
+        .into_iter()
+        .next()
+}
+
+/// Every preset that fires on the latest bar, best score first.
+pub fn detect_all(
+    candles: &[Candle],
+    snap: &Snapshot,
+    rsi: &[Option<f64>],
+    zones: &[Zone],
+    params: &AnalysisParams,
+) -> Vec<Setup> {
+    let (Some(atr), Some(&last)) = (snap.atr14, candles.last()) else {
+        return Vec::new();
+    };
+    if candles.len() < 2 {
+        return Vec::new();
+    }
     let trend = trend_points(snap);
 
     let mut hits: Vec<(Preset, f64, f64, Vec<String>)> = Vec::new(); // preset, closeness, volume, reasons
@@ -178,7 +195,8 @@ pub fn detect(
         }
     }
 
-    hits.into_iter()
+    let mut setups: Vec<Setup> = hits
+        .into_iter()
         .filter_map(|(preset, closeness, volume, mut reasons)| {
             let plan = plan::build(last.high, atr, zones, &params.plan)?;
             let rr_points = (plan.risk_reward / 3.0).clamp(0.0, 1.0) * 15.0;
@@ -202,7 +220,10 @@ pub fn detect(
                 reasons,
             })
         })
-        .max_by(|a, b| a.score.total().total_cmp(&b.score.total()))
+        .collect();
+    // Stable sort: on equal scores the preset order above decides.
+    setups.sort_by(|a, b| b.score.total().total_cmp(&a.score.total()));
+    setups
 }
 
 /// 0-30: 10 points each for close > 20-day, 20 > 50, 50 > 200.
