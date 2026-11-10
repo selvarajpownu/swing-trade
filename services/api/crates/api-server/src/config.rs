@@ -266,6 +266,13 @@ pub(crate) mod tests {
         assert!(with(&["--cors-origins", "localhost:3000"])
             .validate()
             .is_err());
-        assert!(with(&["--data-providers", " , "]).validate().is_err());
+        // `base` already sets --data-providers, and clap rejects a repeated flag.
+        let no_providers = config_from(&[
+            "--api-token",
+            "test-token-0123456789",
+            "--data-providers",
+            " , ",
+        ]);
+        assert!(no_providers.validate().is_err());
     }
 }

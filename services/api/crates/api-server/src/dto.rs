@@ -471,7 +471,8 @@ mod tests {
             preset: Preset::SupportBounce,
             state: SetupState::LowRiskReward,
             plan: TradePlan {
-                entry: 2061.5000000000002,
+                // Float noise as produced by tick rounding; the DTO must print 2061.5.
+                entry: 2061.5 + 1e-9,
                 stop: 1985.0,
                 target: 2210.0,
                 risk_per_share: 76.5,
