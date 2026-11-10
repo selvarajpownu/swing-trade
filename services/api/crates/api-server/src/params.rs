@@ -57,6 +57,19 @@ pub fn parse_symbols(raw: &str) -> Result<Vec<String>, ApiError> {
     Ok(out)
 }
 
+/// Like [`parse_symbols`] but for server configuration: an empty list is
+/// fine and there is no per-request cap.
+pub fn parse_symbols_lenient(raw: &str) -> Result<Vec<String>, ApiError> {
+    let mut out: Vec<String> = Vec::new();
+    for part in raw.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+        let symbol = normalize_symbol(part)?;
+        if !out.contains(&symbol) {
+            out.push(symbol);
+        }
+    }
+    Ok(out)
+}
+
 /// Checks a capital amount in rupees.
 pub fn check_capital(capital: f64) -> Result<f64, ApiError> {
     if capital.is_finite() && capital > 0.0 && capital <= MAX_CAPITAL {

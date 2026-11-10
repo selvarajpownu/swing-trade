@@ -67,6 +67,100 @@ impl StockItem {
     }
 }
 
+/// `GET /v1/scan`.
+#[derive(Debug, Serialize)]
+pub struct ScanResponse {
+    pub provider: &'static str,
+    pub status: ScanStatusDto,
+    /// Matching rows before `limit`.
+    pub total: usize,
+    pub items: Vec<ScanItem>,
+}
+
+/// Scanner progress, times in ISO 8601 UTC.
+#[derive(Debug, Serialize)]
+pub struct ScanStatusDto {
+    pub state: &'static str,
+    pub universe_size: usize,
+    pub scanned: usize,
+    pub failed: Vec<String>,
+    pub excluded: Vec<String>,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub next_run_at: Option<String>,
+}
+
+impl From<&crate::scan::ScanStatus> for ScanStatusDto {
+    fn from(s: &crate::scan::ScanStatus) -> Self {
+        let iso = |t: Option<chrono::DateTime<chrono::Utc>>| {
+            t.map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        };
+        Self {
+            state: s.phase.as_str(),
+            universe_size: s.universe_size,
+            scanned: s.scanned,
+            failed: s.failed.clone(),
+            excluded: s.excluded.clone(),
+            started_at: iso(s.started_at),
+            finished_at: iso(s.finished_at),
+            next_run_at: iso(s.next_run_at),
+        }
+    }
+}
+
+/// One scanner row: list fields from the latest daily bar plus its setups.
+#[derive(Debug, Serialize)]
+pub struct ScanItem {
+    pub symbol: String,
+    pub name: String,
+    pub exchange: String,
+    pub industry: Option<String>,
+    pub price: f64,
+    pub change: f64,
+    pub change_pct: f64,
+    pub high_52w: f64,
+    pub low_52w: f64,
+    pub volume: u64,
+    pub bar_time: i64,
+    pub sparkline: Vec<f64>,
+    pub presets: Vec<PresetDto>,
+    pub setup: SetupSummary,
+}
+
+impl ScanItem {
+    /// `setup` is the row's setup to show; its quantity is re-sized for
+    /// `capital` and `risk` (the scan itself ran with the server defaults).
+    pub fn new(row: &crate::scan::ScanRow, setup: &Setup, capital: f64, risk: f64) -> Self {
+        let mut summary = SetupSummary::from(setup);
+        summary.quantity = quantity_for(setup.plan.risk_per_share, capital, risk);
+        Self {
+            symbol: row.symbol.clone(),
+            name: row.name.clone(),
+            exchange: row.exchange.clone(),
+            industry: row.industry.clone(),
+            price: round2(row.price),
+            change: round2(row.change),
+            change_pct: round2(row.change_pct),
+            high_52w: round2(row.high_52w),
+            low_52w: round2(row.low_52w),
+            volume: whole(row.volume),
+            bar_time: row.bar_time,
+            sparkline: row.sparkline.clone(),
+            presets: row.setups.iter().map(|s| s.preset.into()).collect(),
+            setup: summary,
+        }
+    }
+}
+
+/// `floor(capital × risk ÷ risk per share)`, as in the trade plan.
+fn quantity_for(risk_per_share: f64, capital: f64, risk: f64) -> u64 {
+    if risk_per_share > 0.0 && risk_per_share.is_finite() {
+        (capital * risk / risk_per_share).floor().max(0.0) as u64
+    } else {
+        0
+    }
+}
+
 /// Setup fields shown in the list.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SetupSummary {

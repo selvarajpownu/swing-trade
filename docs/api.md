@@ -92,3 +92,57 @@ Query: `interval` (`1d` default, `1w`, `15m`), `capital`, `risk` as above.
 - `snapshot` indicator fields may be `null` when history is too short.
 - `zones` are nearest-to-price first.
 - `setup` may be `null`.
+
+## GET /v1/scan
+
+Ranked swing setups across the scan universe (`UNIVERSE_FILE`, else `UNIVERSE`, else `WATCHLIST`). A background task scans
+on daily candles; this endpoint only reads the latest results, so it is fast and never calls a data provider.
+
+Query (all optional):
+
+| Param | Default | Meaning |
+|---|---|---|
+| `preset` | any | `pullback`, `breakout`, `support_bounce` or `oversold`. With a preset, each row shows that preset's plan. |
+| `min_score` | `0` | Minimum setup score (0-100). |
+| `min_rr` | `0` | Minimum risk-reward. |
+| `state` | any | `watching` or `low_risk_reward`. |
+| `limit` | `50` | Rows to return, 1-500. |
+| `capital`, `risk` | server defaults | As for `/v1/stocks`; only `quantity` depends on them. |
+
+```json
+{
+  "provider": "indmoney",
+  "status": {
+    "state": "idle",
+    "universe_size": 500,
+    "scanned": 497,
+    "failed": ["XYZ"],
+    "excluded": ["INDRAMEDCO"],
+    "started_at": "2026-11-10T10:20:00Z",
+    "finished_at": "2026-11-10T10:41:12Z",
+    "next_run_at": "2026-11-10T11:11:12Z"
+  },
+  "total": 23,
+  "items": [
+    {
+      "symbol": "ASKAUTOLTD", "name": "ASK Automotive", "exchange": "NSE", "industry": "Auto Components",
+      "price": 613.45, "change": -8.45, "change_pct": -1.36,
+      "high_52w": 687.7, "low_52w": 375.3, "volume": 512345,
+      "bar_time": 1794182400,
+      "sparkline": [601.2, 610.0, 613.45],
+      "presets": ["pullback"],
+      "setup": { "preset": "pullback", "label": "Pullback", "state": "watching", "score": 68,
+                 "entry": 625.1, "stop": 590.0, "target": 700.0, "risk_reward": 2.13, "quantity": 142 }
+    }
+  ]
+}
+```
+
+- `status.state`: `pending` (no scan finished yet), `running` or `idle`. While a scan runs, `items` holds the previous
+  completed scan's results (empty before the first one) and `scanned` counts progress.
+- `provider`: the provider the scan read from: the first entry in `DATA_PROVIDERS`. A scan never falls back to demo.
+- Items are the rows with at least one setup that passes every filter, best score first; `total` counts them before `limit`.
+- Prices come from the latest **daily candle** (`bar_time`, Unix seconds), not a live quote. `change` is against the previous
+  daily close. `industry` is `null` unless the universe file has an industry column.
+- `presets`: every preset firing on the latest bar; `setup` is the best one that passes the filters.
+- Indraprastha Medical (`INDRAMEDCO`) and any `SCAN_EXCLUDE` symbols are never scanned and are listed in `status.excluded`.

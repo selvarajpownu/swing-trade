@@ -83,6 +83,47 @@ pub struct Config {
     /// How long candles are cached, in seconds.
     #[arg(long, env = "CANDLE_TTL_SECS", default_value_t = 600, global = true)]
     pub candle_ttl_secs: u64,
+
+    /// Client-side INDmoney budget in cost units per minute (server allows 60).
+    #[arg(long, env = "INDMONEY_RATE_PER_MIN", default_value_t = indmoney::DEFAULT_RATE_PER_MIN, global = true)]
+    pub indmoney_rate_per_min: u32,
+
+    /// Symbols to scan (comma separated); used when UNIVERSE_FILE is not set.
+    /// Empty means the WATCHLIST.
+    #[arg(long, env = "UNIVERSE", default_value = "", global = true)]
+    pub universe: String,
+
+    /// File with the symbols to scan: one per line, or a CSV with a `Symbol`
+    /// column (NSE's index constituent files work as downloaded).
+    #[arg(long, env = "UNIVERSE_FILE", global = true)]
+    pub universe_file: Option<PathBuf>,
+
+    /// Extra symbols never scanned (INDRAMEDCO is always excluded).
+    #[arg(long, env = "SCAN_EXCLUDE", default_value = "", global = true)]
+    pub scan_exclude: String,
+
+    /// Minutes between scans; 0 scans once at startup only.
+    #[arg(long, env = "SCAN_INTERVAL_MINS", default_value_t = 30, global = true)]
+    pub scan_interval_mins: u64,
+
+    /// Network candle fetches per minute during a scan (each costs 2 INDmoney
+    /// units), leaving the rest of the budget for page requests.
+    #[arg(
+        long,
+        env = "SCAN_SYMBOLS_PER_MIN",
+        default_value_t = 15,
+        global = true
+    )]
+    pub scan_symbols_per_min: u32,
+
+    /// Directory for the daily-candle file store used by scans.
+    #[arg(
+        long,
+        env = "CANDLE_STORE_DIR",
+        default_value = ".data/candles",
+        global = true
+    )]
+    pub candle_store_dir: PathBuf,
 }
 
 impl fmt::Debug for Config {
@@ -100,6 +141,13 @@ impl fmt::Debug for Config {
             .field("default_risk", &self.default_risk)
             .field("quote_ttl_secs", &self.quote_ttl_secs)
             .field("candle_ttl_secs", &self.candle_ttl_secs)
+            .field("indmoney_rate_per_min", &self.indmoney_rate_per_min)
+            .field("universe", &self.universe)
+            .field("universe_file", &self.universe_file)
+            .field("scan_exclude", &self.scan_exclude)
+            .field("scan_interval_mins", &self.scan_interval_mins)
+            .field("scan_symbols_per_min", &self.scan_symbols_per_min)
+            .field("candle_store_dir", &self.candle_store_dir)
             .finish()
     }
 }
@@ -163,6 +211,16 @@ impl Config {
             }
         }
         check_http_url(&self.indmoney_mcp_url).context("INDMONEY_MCP_URL")?;
+        if !(1..=600).contains(&self.indmoney_rate_per_min) {
+            bail!("INDMONEY_RATE_PER_MIN must be between 1 and 600");
+        }
+        if !(1..=300).contains(&self.scan_symbols_per_min) {
+            bail!("SCAN_SYMBOLS_PER_MIN must be between 1 and 300");
+        }
+        params::parse_symbols_lenient(&self.universe)
+            .map_err(|e| anyhow::anyhow!("UNIVERSE: {e}"))?;
+        params::parse_symbols_lenient(&self.scan_exclude)
+            .map_err(|e| anyhow::anyhow!("SCAN_EXCLUDE: {e}"))?;
         Ok(())
     }
 }
@@ -274,5 +332,11 @@ pub(crate) mod tests {
             " , ",
         ]);
         assert!(no_providers.validate().is_err());
+
+        assert!(with(&["--universe", "OK,NOT OK"]).validate().is_err());
+        assert!(with(&["--scan-symbols-per-min", "0"]).validate().is_err());
+        assert!(with(&["--indmoney-rate-per-min", "0"]).validate().is_err());
+        let fine = with(&["--universe", "", "--scan-exclude", "IEX"]);
+        assert!(fine.validate().is_ok());
     }
 }

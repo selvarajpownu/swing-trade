@@ -11,7 +11,10 @@ pub mod dto;
 pub mod error;
 pub mod params;
 pub mod routes;
+pub mod scan;
 pub mod state;
+pub mod store;
+pub mod universe;
 
 use std::future::Future;
 
@@ -28,11 +31,13 @@ pub async fn serve(
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     config.validate()?;
+    let universe = universe::load(&config)?;
     let market = state::build_market(&config)?;
     let providers = market.ids();
     let bind_addr = config.bind_addr;
     let state = AppState::new(config, market);
-    let app = routes::router(state)?;
+    let app = routes::router(state.clone())?;
+    tokio::spawn(scan::run_forever(state, universe));
 
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await

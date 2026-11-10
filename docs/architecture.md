@@ -81,9 +81,23 @@ Quality stays 0 until the CSV fundamentals import arrives (phase 3). Each setup 
 - **Quantity:** `floor(capital × risk ÷ (entry − stop))`.
 - Plans with risk-reward below 2.0 are returned with state `low_risk_reward` (shown greyed out); others are `watching`.
 
+## Background scanner (phase 2)
+
+`GET /v1/scan` reads results kept in memory by a background task (`api-server/src/scan.rs`):
+
+1. The universe comes from `UNIVERSE_FILE`, `UNIVERSE` or `WATCHLIST` (`universe.rs`). `INDRAMEDCO` is always excluded.
+2. For each symbol the scanner loads daily candles from the file store (`store.rs`, `CANDLE_STORE_DIR`) when they are
+   fresh for the current session, otherwise fetches them from the **primary** provider only, paced at
+   `SCAN_SYMBOLS_PER_MIN`. A scan never falls back to demo.
+3. `swing_core::analyze` returns every preset that fires (`Analysis::setups`); stocks with at least one are kept.
+4. Results replace the previous scan's when the run finishes; the next run starts after `SCAN_INTERVAL_MINS`.
+
+The INDmoney provider's rate limiter (`market-data/src/rate.rs`) is shared by the scanner and page requests, so a
+running scan slows pages down slightly rather than tripping INDmoney's limit.
+
 ## State and storage
 
-- Phase 1: in-memory caches only. Restarting the API clears them. The only file on disk is the INDmoney token in `.data/`.
+- In-memory caches; restarting the API clears them. On disk in `.data/`: the INDmoney token and the scanner's daily-candle store.
 - Phase 3: Postgres + TimescaleDB for candle history, nightly Nifty 500 sync and fundamentals. The commented `db` service in `docker-compose.yml` shows where it goes.
 - Python (`services/quant`) is not created yet; it will be added only if a needed analytics library exists only in Python.
 

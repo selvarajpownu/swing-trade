@@ -12,6 +12,7 @@ use swing_core::Candle;
 
 use crate::cache::TtlCache;
 use crate::config::Config;
+use crate::scan::Scanner;
 
 /// A cached quote lookup: `None` remembers that the provider has no such symbol.
 pub type CachedQuote = (Option<Quote>, &'static str);
@@ -30,6 +31,8 @@ pub struct AppState {
     pub quotes: Arc<TtlCache<String, CachedQuote>>,
     /// (symbol, interval) → candles.
     pub candles: Arc<TtlCache<(String, Interval), CachedCandles>>,
+    /// Background scan results for `GET /v1/scan`.
+    pub scanner: Arc<Scanner>,
 }
 
 impl AppState {
@@ -43,7 +46,10 @@ impl AppState {
             Duration::from_secs(config.candle_ttl_secs),
             CANDLE_CACHE_CAPACITY,
         );
+        // Scans read only the primary provider; never a fallback.
+        let primary = market.ids().first().copied().unwrap_or("demo");
         Self {
+            scanner: Arc::new(Scanner::new(primary)),
             config: Arc::new(config),
             market: Arc::new(market),
             quotes: Arc::new(quotes),
@@ -175,7 +181,8 @@ pub fn build_market(config: &Config) -> anyhow::Result<FallbackProvider> {
         match id.as_str() {
             indmoney::ID => match indmoney::token_source(&config.indmoney_token_file) {
                 Some(tokens) => {
-                    let provider = IndmoneyProvider::new(config.indmoney_mcp_url.clone(), tokens)?;
+                    let provider = IndmoneyProvider::new(config.indmoney_mcp_url.clone(), tokens)?
+                        .with_rate_limit(config.indmoney_rate_per_min);
                     providers.push(Arc::new(provider));
                 }
                 None => tracing::warn!(

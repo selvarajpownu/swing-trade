@@ -1,6 +1,7 @@
 //! HTTP routes and middleware stack.
 
 pub mod health;
+pub mod scan;
 pub mod stocks;
 
 use std::time::Duration;
@@ -29,6 +30,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     let v1 = Router::new()
         .route("/stocks", get(stocks::list))
         .route("/stocks/{symbol}", get(stocks::detail))
+        .route("/scan", get(scan::list))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_token,
@@ -202,6 +204,90 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
         let resp = get(&format!("/v1/stocks/{}", "A".repeat(21)), Some(TOKEN)).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn scans_the_universe_in_the_background() {
+        // A wide demo universe so some presets fire; INDRAMEDCO must never show.
+        let universe = "COFORGE,MCX,CAMS,IEX,ACE,AJAXENGG,ASKAUTOLTD,PERSISTENT,OFSS,BSE,                        INDRAMEDCO,TCS,INFY,HDFCBANK,ICICIBANK,SBIN,LT,ITC,TITAN,ASIANPAINT,                        MARUTI,SUNPHARMA,LUPIN,NESTLEIND,HAL,BEL,TRENT,DMART,POLYCAB,DIXON";
+        let config = crate::config::tests::config_from(&[
+            "--api-token",
+            TOKEN,
+            "--data-providers",
+            "demo",
+            "--universe",
+            universe,
+        ]);
+        let universe = crate::universe::load(&config).unwrap();
+        let market = build_market(&config).unwrap();
+        let state = AppState::new(config, market);
+        let app = router(state.clone()).unwrap();
+        let call = |uri: &str| {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap();
+            app.clone().oneshot(req)
+        };
+
+        let before = json(call("/v1/scan").await.unwrap()).await;
+        assert_eq!(before["status"]["state"], "pending");
+        assert_eq!(before["items"].as_array().unwrap().len(), 0);
+
+        crate::scan::run_once(&state, &universe).await;
+        let v = json(call("/v1/scan?limit=500").await.unwrap()).await;
+        assert_eq!(v["provider"], "demo");
+        assert_eq!(v["status"]["state"], "idle");
+        assert_eq!(v["status"]["universe_size"], 29);
+        assert_eq!(v["status"]["scanned"], 29);
+        assert_eq!(v["status"]["excluded"], serde_json::json!(["INDRAMEDCO"]));
+        assert!(v["status"]["finished_at"].as_str().unwrap().ends_with('Z'));
+        let items = v["items"].as_array().unwrap();
+        assert!(!items.is_empty(), "no demo setups fired");
+        assert_eq!(v["total"].as_u64().unwrap() as usize, items.len());
+        let scores: Vec<u64> = items
+            .iter()
+            .map(|i| i["setup"]["score"].as_u64().unwrap())
+            .collect();
+        assert!(scores.windows(2).all(|w| w[0] >= w[1]), "{scores:?}");
+        for item in items {
+            assert_ne!(item["symbol"], "INDRAMEDCO");
+            assert!(item["presets"]
+                .as_array()
+                .unwrap()
+                .contains(&item["setup"]["preset"]));
+            assert!(item["bar_time"].is_i64());
+            assert_eq!(item["sparkline"].as_array().unwrap().len(), 30);
+        }
+
+        // Filters narrow the list; quantity follows capital and risk.
+        let best = &items[0];
+        let preset = best["setup"]["preset"].as_str().unwrap();
+        let only = json(
+            call(&format!("/v1/scan?preset={preset}&limit=500"))
+                .await
+                .unwrap(),
+        )
+        .await;
+        for item in only["items"].as_array().unwrap() {
+            assert_eq!(item["setup"]["preset"], preset);
+        }
+        let strict = json(call("/v1/scan?min_score=100&min_rr=50").await.unwrap()).await;
+        assert_eq!(strict["total"], 0);
+        let one = json(
+            call("/v1/scan?limit=1&capital=1000000&risk=0.02")
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(one["items"].as_array().unwrap().len(), 1);
+        let q1 = best["setup"]["quantity"].as_u64().unwrap();
+        let q4 = one["items"][0]["setup"]["quantity"].as_u64().unwrap();
+        assert!(q4 >= q1 * 4 - 1 && q4 <= q1 * 4 + 4, "{q1} -> {q4}");
+
+        let bad = call("/v1/scan?preset=nope").await.unwrap();
+        assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
