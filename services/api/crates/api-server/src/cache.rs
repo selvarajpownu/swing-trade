@@ -1,4 +1,4 @@
-//! A small in-memory cache with a fixed time-to-live.
+//! A small in-memory cache with a default time-to-live per entry.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -13,6 +13,7 @@ use tokio::sync::RwLock;
 pub struct TtlCache<K, V> {
     ttl: Duration,
     capacity: usize,
+    /// Value and the moment it expires.
     entries: RwLock<HashMap<K, (Instant, V)>>,
 }
 
@@ -41,30 +42,37 @@ where
         let entries = self.entries.read().await;
         entries
             .get(key)
-            .filter(|(at, _)| at.elapsed() < self.ttl)
+            .filter(|(expires, _)| Instant::now() < *expires)
             .map(|(_, v)| v.clone())
     }
 
-    /// Stores `value` under `key`, replacing any previous value.
+    /// Stores `value` under `key` for the default TTL, replacing any previous value.
     pub async fn insert(&self, key: K, value: V) {
-        if self.ttl.is_zero() {
+        self.insert_for(key, value, self.ttl).await;
+    }
+
+    /// Stores `value` for `ttl`, capped at the default TTL (a zero default
+    /// still disables caching).
+    pub async fn insert_for(&self, key: K, value: V, ttl: Duration) {
+        let ttl = ttl.min(self.ttl);
+        if ttl.is_zero() {
             return;
         }
+        let now = Instant::now();
         let mut entries = self.entries.write().await;
         if entries.len() >= self.capacity && !entries.contains_key(&key) {
-            let ttl = self.ttl;
-            entries.retain(|_, (at, _)| at.elapsed() < ttl);
+            entries.retain(|_, (expires, _)| now < *expires);
             if entries.len() >= self.capacity {
-                let oldest = entries
+                let soonest = entries
                     .iter()
-                    .min_by_key(|(_, (at, _))| *at)
+                    .min_by_key(|(_, (expires, _))| *expires)
                     .map(|(k, _)| k.clone());
-                if let Some(k) = oldest {
+                if let Some(k) = soonest {
                     entries.remove(&k);
                 }
             }
         }
-        entries.insert(key, (Instant::now(), value));
+        entries.insert(key, (now + ttl, value));
     }
 
     /// Number of stored entries, including expired ones not yet evicted.
@@ -96,6 +104,12 @@ mod tests {
         short.insert("a", 1).await;
         tokio::time::sleep(Duration::from_millis(40)).await;
         assert_eq!(short.get(&"a").await, None);
+
+        cache.insert_for("b", 1, Duration::from_millis(20)).await;
+        assert_eq!(cache.get(&"b").await, Some(1));
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert_eq!(cache.get(&"b").await, None, "per-entry TTL applies");
+        assert_eq!(cache.get(&"a").await, Some(2), "default TTL unchanged");
     }
 
     #[tokio::test]

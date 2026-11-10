@@ -119,7 +119,9 @@ impl AppState {
         }
         let (candles, src) = self.market.candles_with_source(symbol, interval).await?;
         let entry = (Arc::new(candles), src);
-        self.candles.insert(key, entry.clone()).await;
+        self.candles
+            .insert_for(key, entry.clone(), self.candle_ttl(src))
+            .await;
         Ok(entry)
     }
 
@@ -137,8 +139,23 @@ impl AppState {
             }
         }
         let candles = Arc::new(self.provider(source)?.candles(symbol, interval).await?);
-        self.candles.insert(key, (candles.clone(), source)).await;
+        self.candles
+            .insert_for(key, (candles.clone(), source), self.candle_ttl(source))
+            .await;
         Ok(candles)
+    }
+
+    /// Candles from the first provider in `DATA_PROVIDERS` keep the full
+    /// candle TTL. Anything served by a fallback (usually demo, after an
+    /// INDmoney hiccup) lives only as long as a quote, so real data returns
+    /// as soon as the primary source recovers.
+    fn candle_ttl(&self, source: &'static str) -> Duration {
+        let primary = self.market.ids().first().copied();
+        if primary == Some(source) {
+            self.candles.ttl()
+        } else {
+            self.quotes.ttl()
+        }
     }
 
     fn provider(&self, id: &'static str) -> Result<Arc<dyn MarketData>, DataError> {
@@ -218,6 +235,15 @@ mod tests {
 
         let q = state.quote_from("demo", "MCX").await.unwrap().unwrap();
         assert_eq!(q.symbol, "MCX");
+    }
+
+    #[test]
+    fn fallback_candles_expire_with_quotes() {
+        let state = AppState::new(test_config(), build_market(&test_config()).unwrap());
+        // `test_config` lists only demo, so demo is the primary source here.
+        assert_eq!(state.candle_ttl("demo"), state.candles.ttl());
+        assert_eq!(state.candle_ttl("indmoney"), state.quotes.ttl());
+        assert!(state.quotes.ttl() < state.candles.ttl());
     }
 
     #[test]
