@@ -323,7 +323,7 @@ pub async fn login(opts: &LoginOptions) -> Result<StoredToken> {
         &pkce_challenge(&verifier),
         &state,
         &opts.mcp_url,
-        &resource_meta.scopes_supported,
+        &read_only_scopes(&resource_meta.scopes_supported),
     )?;
 
     println!("\nSign in to INDmoney in your browser to connect swing-trade (read-only).");
@@ -474,6 +474,16 @@ async fn register_client(
         .and_then(Value::as_str)
         .map(str::to_owned)
         .ok_or_else(|| decode("client registration response has no client_id"))
+}
+
+/// The advertised scopes minus any write scope (INDmoney lists e.g.
+/// `insights:write`). The app only reads, so it never asks for more.
+fn read_only_scopes(supported: &[String]) -> Vec<String> {
+    supported
+        .iter()
+        .filter(|s| !s.to_ascii_lowercase().ends_with("write"))
+        .cloned()
+        .collect()
 }
 
 fn authorization_url(
@@ -904,6 +914,17 @@ mod tests {
         assert_eq!(get("redirect_uri"), Some("http://127.0.0.1:8765/callback"));
         assert_eq!(get("resource"), Some("https://mcp.indmoney.com/mcp"));
         assert_eq!(get("scope"), Some("read offline_access"));
+    }
+
+    #[test]
+    fn requests_only_read_scopes() {
+        let supported: Vec<String> = ["portfolio:read", "market:read", "insights:write", "x:Write"]
+            .map(str::to_owned)
+            .to_vec();
+        assert_eq!(
+            read_only_scopes(&supported),
+            vec!["portfolio:read", "market:read"]
+        );
     }
 
     #[test]
