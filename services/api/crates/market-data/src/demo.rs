@@ -11,7 +11,7 @@
 use async_trait::async_trait;
 use swing_core::Candle;
 
-use crate::{names, Interval, MarketData, Quote, Result};
+use crate::{names, Interval, Market, MarketData, Quote, Result};
 
 /// Provider id reported for demo data.
 pub const ID: &str = "demo";
@@ -102,10 +102,11 @@ fn quote_from_daily(symbol: &str, candles: &[Candle]) -> Option<Quote> {
         .map_or(last.open, |i| candles[i].close);
     let year = &candles[candles.len().saturating_sub(BARS_52W)..];
     let change = last.close - prev_close;
+    let (market, bare) = Market::split(symbol);
     Some(Quote {
         symbol: symbol.to_owned(),
-        name: names::company_name(symbol).unwrap_or(symbol).to_owned(),
-        exchange: "NSE".to_owned(),
+        name: names::display_name(market, bare),
+        exchange: market.exchange().to_owned(),
         price: last.close,
         change: round2(change),
         change_pct: if prev_close > 0.0 {
@@ -160,7 +161,7 @@ fn generate_daily(symbol: &str, end_day: i64, bars: usize) -> Vec<Candle> {
 }
 
 /// Aggregates daily bars into Monday-anchored weekly bars.
-fn weekly(daily: &[Candle]) -> Vec<Candle> {
+pub(crate) fn weekly(daily: &[Candle]) -> Vec<Candle> {
     let mut out: Vec<Candle> = Vec::new();
     for c in daily {
         let day = c.ts.div_euclid(DAY_SECS);

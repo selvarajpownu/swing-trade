@@ -3,7 +3,7 @@
 //! Prices are rounded to paise and volumes to whole shares so the JSON
 //! stays clean (no `2061.5000000000002`).
 
-use market_data::Quote;
+use market_data::{Market, NewsItem, Quote};
 use serde::Serialize;
 use swing_core::{
     Analysis, Candle, Preset, ScoreBreakdown, Setup, SetupState, Snapshot, Zone, ZoneKind,
@@ -26,6 +26,10 @@ pub struct HealthResponse {
 #[derive(Debug, Serialize)]
 pub struct StocksResponse {
     pub provider: &'static str,
+    /// `in`, `us` or `mcx`.
+    pub market: &'static str,
+    /// `INR` or `USD`; every price in the response is in this currency.
+    pub currency: &'static str,
     /// ISO 8601, UTC.
     pub as_of: String,
     pub items: Vec<StockItem>,
@@ -65,6 +69,35 @@ impl StockItem {
             setup,
         }
     }
+}
+
+/// `GET /v1/stocks/{symbol}/news`: headlines from the data provider.
+#[derive(Debug, Serialize)]
+pub struct NewsResponse {
+    pub provider: &'static str,
+    pub market: &'static str,
+    pub symbol: String,
+    pub items: Vec<NewsItem>,
+}
+
+/// `GET /v1/news`: Google News headlines for a market's watchlist or one stock.
+#[derive(Debug, Serialize)]
+pub struct HeadlinesResponse {
+    /// Always `google_news`.
+    pub source: &'static str,
+    pub market: &'static str,
+    /// ISO 8601, UTC.
+    pub as_of: String,
+    pub items: Vec<Headline>,
+}
+
+/// One headline and the stock it was found for.
+#[derive(Debug, Clone, Serialize)]
+pub struct Headline {
+    pub symbol: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub item: NewsItem,
 }
 
 /// `GET /v1/scan`.
@@ -132,7 +165,7 @@ impl ScanItem {
     /// `capital` and `risk` (the scan itself ran with the server defaults).
     pub fn new(row: &crate::scan::ScanRow, setup: &Setup, capital: f64, risk: f64) -> Self {
         let mut summary = SetupSummary::from(setup);
-        summary.quantity = quantity_for(setup.plan.risk_per_share, capital, risk);
+        summary.quantity = Some(quantity_for(setup.plan.risk_per_share, capital, risk));
         Self {
             symbol: row.symbol.clone(),
             name: row.name.clone(),
@@ -172,7 +205,8 @@ pub struct SetupSummary {
     pub stop: f64,
     pub target: f64,
     pub risk_reward: f64,
-    pub quantity: u64,
+    /// Shares to trade; `null` where it cannot be sized (MCX futures trade in lots).
+    pub quantity: Option<u64>,
 }
 
 impl From<&Setup> for SetupSummary {
@@ -186,7 +220,7 @@ impl From<&Setup> for SetupSummary {
             stop: round2(s.plan.stop),
             target: round2(s.plan.target),
             risk_reward: round2(s.plan.risk_reward),
-            quantity: s.plan.quantity,
+            quantity: Some(s.plan.quantity),
         }
     }
 }
@@ -297,6 +331,8 @@ impl From<ZoneKind> for ZoneKindDto {
 #[derive(Debug, Serialize)]
 pub struct StockDetailResponse {
     pub provider: &'static str,
+    pub market: &'static str,
+    pub currency: &'static str,
     pub quote: QuoteDto,
     pub candles: Vec<CandleDto>,
     pub overlays: Overlays,
@@ -309,6 +345,7 @@ impl StockDetailResponse {
     /// Assembles the stock page. `analysis` is `None` when history is too short.
     pub fn build(
         provider: &'static str,
+        market: Market,
         quote: &Quote,
         candles: &[Candle],
         analysis: Option<&Analysis>,
@@ -331,9 +368,17 @@ impl StockDetailResponse {
                 None,
             ),
         };
+        let mut quote = QuoteDto::from(quote);
+        quote.symbol = Market::split(&quote.symbol).1.to_owned();
+        let mut setup = setup;
+        if let (Market::Mcx, Some(s)) = (market, setup.as_mut()) {
+            s.summary.quantity = None;
+        }
         Self {
             provider,
-            quote: quote.into(),
+            market: market.as_str(),
+            currency: market.currency(),
+            quote,
             candles: candles.iter().map(CandleDto::from).collect(),
             overlays,
             snapshot,
@@ -517,10 +562,11 @@ pub fn quote_from_candles(symbol: &str, candles: &[Candle]) -> Quote {
         .unwrap_or(price);
     let snapshot = plain_snapshot(candles);
     let change = price - prev_close;
+    let (market, bare) = Market::split(symbol);
     Quote {
         symbol: symbol.to_owned(),
-        name: symbol.to_owned(),
-        exchange: "NSE".to_owned(),
+        name: bare.to_owned(),
+        exchange: market.exchange().to_owned(),
         price,
         change,
         change_pct: if prev_close > 0.0 {
@@ -721,7 +767,7 @@ mod tests {
         assert_eq!(quote.high_52w, 105.0);
         assert_eq!(quote.low_52w, 99.0);
 
-        let resp = StockDetailResponse::build("demo", &quote, &candles, None);
+        let resp = StockDetailResponse::build("demo", Market::In, &quote, &candles, None);
         let v = serde_json::to_value(&resp).unwrap();
         assert_eq!(v["provider"], "demo");
         assert_eq!(v["candles"].as_array().unwrap().len(), 5);
@@ -753,6 +799,7 @@ mod tests {
         let quote = quote_from_candles("X", &candles);
         let v = serde_json::to_value(StockDetailResponse::build(
             "demo",
+            Market::In,
             &quote,
             &candles,
             Some(&analysis),

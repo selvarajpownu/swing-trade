@@ -4,8 +4,9 @@
 //! - Reads only the primary provider (the first in `DATA_PROVIDERS`). A scan
 //!   never falls back to demo, so ranked lists never mix in synthetic prices.
 //! - Daily candles come from the [`CandleStore`] when fresh for the current
-//!   session; network fetches are paced at `SCAN_SYMBOLS_PER_MIN`, leaving
-//!   the rest of the provider's rate budget for page requests.
+//!   session; network fetches are paced at `SCAN_SYMBOLS_PER_HOUR`, leaving
+//!   the rest of the provider's hourly budget for page requests. When the
+//!   provider is rate limited the scan waits and retries the same stock.
 //! - Results of the last completed scan stay readable while the next runs.
 
 use std::sync::Arc;
@@ -143,7 +144,7 @@ pub async fn run_once(state: &AppState, universe: &Universe) {
     // Demo data is generated locally: no pacing, nothing worth storing.
     let networked = provider.id() != "demo";
     let pace = networked.then(|| {
-        Duration::from_secs_f64(60.0 / f64::from(state.config.scan_symbols_per_min.max(1)))
+        Duration::from_secs_f64(3_600.0 / f64::from(state.config.scan_symbols_per_hour.max(1)))
     });
     let fetcher = Fetcher {
         provider: provider.clone(),
@@ -219,6 +220,11 @@ async fn scan_entries(
     (rows, failed)
 }
 
+/// Times a scan retries one stock after the provider reports a rate limit.
+const RATE_LIMIT_ATTEMPTS: u32 = 3;
+/// Longest single wait for the provider's budget during a scan.
+const MAX_RATE_LIMIT_WAIT: Duration = Duration::from_secs(20 * 60);
+
 /// Daily candles from the store, or from the provider at the scan's pace.
 struct Fetcher {
     provider: Arc<dyn MarketData>,
@@ -240,7 +246,20 @@ impl Fetcher {
             tokio::time::sleep_until(last + pace).await;
         }
         self.last_fetch = Some(Instant::now());
-        let candles = self.provider.candles(symbol, Interval::Day).await?;
+        let mut attempts = 0;
+        let candles = loop {
+            match self.provider.candles(symbol, Interval::Day).await {
+                Err(market_data::Error::RateLimited { retry_after, .. })
+                    if attempts < RATE_LIMIT_ATTEMPTS =>
+                {
+                    attempts += 1;
+                    let wait = (retry_after + Duration::from_secs(1)).min(MAX_RATE_LIMIT_WAIT);
+                    tracing::info!(%symbol, secs = wait.as_secs(), "scan: provider rate limited; waiting");
+                    tokio::time::sleep(wait).await;
+                }
+                other => break other?,
+            }
+        };
         if let Some(store) = &self.store {
             if !candles.is_empty() {
                 if let Err(e) = store.save(id, symbol, &self.session, &candles).await {

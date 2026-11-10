@@ -19,7 +19,7 @@ pub use fallback::FallbackProvider;
 pub use indmoney::IndmoneyProvider;
 pub use mcp::{StaticToken, TokenSource};
 pub use rate::RateLimiter;
-pub use types::{Interval, ParseIntervalError, Quote};
+pub use types::{Interval, Market, NewsItem, ParseIntervalError, Quote};
 
 use async_trait::async_trait;
 use swing_core::Candle;
@@ -35,4 +35,10 @@ pub trait MarketData: Send + Sync {
 
     /// OHLCV candles, oldest first.
     async fn candles(&self, symbol: &str, interval: Interval) -> Result<Vec<Candle>>;
+
+    /// Recent headlines for one instrument, newest first. Sources without
+    /// news return an empty list (never invented headlines).
+    async fn news(&self, _symbol: &str) -> Result<Vec<NewsItem>> {
+        Ok(Vec::new())
+    }
 }

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use swing_core::Candle;
 
-use crate::{Error, Interval, MarketData, Quote, Result};
+use crate::{Error, Interval, MarketData, NewsItem, Quote, Result};
 
 /// Wraps several providers and serves each request from the first one that
 /// succeeds, in the configured order.
@@ -77,6 +77,23 @@ impl FallbackProvider {
         }
         Err(combine(failures))
     }
+
+    /// Headlines plus the id of the provider that served them. Demo has no
+    /// news, so after an INDmoney failure the list is simply empty.
+    pub async fn news_with_source(&self, symbol: &str) -> Result<(Vec<NewsItem>, &'static str)> {
+        let mut failures = Vec::new();
+        for p in &self.providers {
+            match p.news(symbol).await {
+                Ok(items) => return Ok((items, p.id())),
+                Err(e @ Error::NotFound(_)) => return Err(e),
+                Err(e) => {
+                    tracing::warn!(provider = p.id(), symbol, error = %e, "news failed; trying next provider");
+                    failures.push((p.id(), e));
+                }
+            }
+        }
+        Err(combine(failures))
+    }
 }
 
 /// One failure is returned as is (keeps e.g. `Unauthorized` intact);
@@ -109,6 +126,10 @@ impl MarketData for FallbackProvider {
         self.candles_with_source(symbol, interval)
             .await
             .map(|(c, _)| c)
+    }
+
+    async fn news(&self, symbol: &str) -> Result<Vec<NewsItem>> {
+        self.news_with_source(symbol).await.map(|(n, _)| n)
     }
 }
 

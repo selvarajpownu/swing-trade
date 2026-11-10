@@ -13,13 +13,25 @@ The Rust service (`services/api`) serves JSON. The Next.js app (`apps/web`) call
 { "status": "ok", "version": "0.1.0", "providers": ["indmoney", "demo"] }
 ```
 
+## Markets
+
+`/v1/stocks`, `/v1/stocks/{symbol}` and `/v1/stocks/{symbol}/news` take `market`: `in` (NSE, default), `us` (US stocks,
+prices in USD) or `mcx` (MCX commodity futures, near-month contract, prices in INR). Responses carry `market` and
+`currency` (`INR` or `USD`); every price in the response is in that currency. Symbols are always bare (`AAPL`, `GOLD`).
+
+- US: `interval=15m` is a 400 (daily data only); `capital` defaults to `US_DEFAULT_CAPITAL` (USD).
+- MCX: setups have `quantity: null` (futures trade in lots, and lot sizes are not available).
+
 ## GET /v1/stocks
 
-Query: `symbols` (comma-separated NSE symbols; default = server `WATCHLIST`), `capital` (default 500000), `risk` (fraction, default 0.01).
+Query: `market`, `symbols` (comma-separated; default = the market's watchlist: `WATCHLIST`, `US_WATCHLIST` or
+`COMMODITY_WATCHLIST`), `capital` (default 500000, or `US_DEFAULT_CAPITAL` for `us`), `risk` (fraction, default 0.01).
 
 ```json
 {
   "provider": "demo",
+  "market": "in",
+  "currency": "INR",
   "as_of": "2026-11-10T15:30:00Z",
   "items": [
     {
@@ -54,7 +66,8 @@ Query: `symbols` (comma-separated NSE symbols; default = server `WATCHLIST`), `c
 
 ## GET /v1/stocks/{symbol}
 
-Query: `interval` (`1d` default, `1w`, `15m`), `capital`, `risk` as above.
+Query: `market`, `interval` (`1d` default, `1w`, `15m`), `capital`, `risk` as above. The response also has `market` and
+`currency` at the top level.
 
 ```json
 {
@@ -92,6 +105,37 @@ Query: `interval` (`1d` default, `1w`, `15m`), `capital`, `risk` as above.
 - `snapshot` indicator fields may be `null` when history is too short.
 - `zones` are nearest-to-price first.
 - `setup` may be `null`.
+
+## GET /v1/stocks/{symbol}/news
+
+Headlines from the data provider (INDmoney news: title, summary, sentiment; no publisher or link). Query: `market`.
+Cached 30 minutes. MCX and demo return an empty list; headlines are never invented.
+
+```json
+{
+  "provider": "indmoney", "market": "in", "symbol": "ACE",
+  "items": [
+    { "title": "ACE Secures Defence Order, Shares Rise 3%", "summary": "Action Construction Equipment announced ...",
+      "sentiment": "positive", "published_at": "2026-09-30", "source": null, "url": null }
+  ]
+}
+```
+
+## GET /v1/news
+
+Google News RSS headlines (publisher and link, no sentiment) for one stock (`symbol`) or the whole watchlist of
+`market`, newest first, at most 60, de-duplicated by title. Fetched server-side and cached 30 minutes per stock.
+
+```json
+{
+  "source": "google_news", "market": "in", "as_of": "2026-11-10T17:40:00Z",
+  "items": [
+    { "symbol": "COFORGE", "name": "Coforge", "title": "Coforge shares rise after Q2 results",
+      "summary": null, "sentiment": null, "published_at": "2026-11-09T08:15:00Z",
+      "source": "Moneycontrol", "url": "https://news.google.com/rss/articles/..." }
+  ]
+}
+```
 
 ## GET /v1/scan
 

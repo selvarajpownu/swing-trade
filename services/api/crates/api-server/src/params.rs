@@ -70,6 +70,11 @@ pub fn parse_symbols_lenient(raw: &str) -> Result<Vec<String>, ApiError> {
     Ok(out)
 }
 
+/// `in` (default), `us` or `mcx`.
+pub fn parse_market(raw: Option<&str>) -> Result<market_data::Market, ApiError> {
+    raw.unwrap_or("").parse().map_err(ApiError::BadRequest)
+}
+
 /// Checks a capital amount in rupees.
 pub fn check_capital(capital: f64) -> Result<f64, ApiError> {
     if capital.is_finite() && capital > 0.0 && capital <= MAX_CAPITAL {

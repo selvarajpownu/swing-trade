@@ -9,6 +9,7 @@ pub mod cache;
 pub mod config;
 pub mod dto;
 pub mod error;
+pub mod news;
 pub mod params;
 pub mod routes;
 pub mod scan;

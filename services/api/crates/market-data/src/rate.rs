@@ -1,9 +1,10 @@
 //! A sliding-window rate limiter, shared by every call to one provider.
 //!
-//! INDmoney's MCP server allows a fixed number of "cost units" per minute
-//! across all tools. Staying under that budget on our side is cheaper than
-//! hitting the limit and waiting out `retry_after_seconds`, and it lets the
-//! background scanner and page requests share the budget fairly.
+//! INDmoney's MCP server limits "cost units" both per minute (60) and per
+//! hour (500) across all tools. Staying under those budgets on our side is
+//! cheaper than hitting them, and lets the background scanner and page
+//! requests share them. Callers can cap how long they are willing to wait,
+//! so a page fails fast instead of hanging when the budget is spent.
 
 use std::collections::VecDeque;
 use std::time::Duration;
@@ -11,10 +12,10 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 
-/// Allows at most `limit` cost units in any `window`.
+/// Allows at most `limit` cost units in each of its windows.
 pub struct RateLimiter {
-    limit: u32,
-    window: Duration,
+    /// `(limit, window)` pairs, all enforced together.
+    windows: Vec<(u32, Duration)>,
     state: Mutex<State>,
 }
 
@@ -30,8 +31,7 @@ impl RateLimiter {
     /// `limit` units per `window`. A zero limit is treated as 1.
     pub fn new(limit: u32, window: Duration) -> Self {
         Self {
-            limit: limit.max(1),
-            window,
+            windows: vec![(limit.max(1), window)],
             state: Mutex::new(State::default()),
         }
     }
@@ -41,9 +41,15 @@ impl RateLimiter {
         Self::new(limit, Duration::from_secs(60))
     }
 
-    /// Units allowed per window.
+    /// Adds another window, e.g. an hourly budget on top of a per-minute one.
+    pub fn with_window(mut self, limit: u32, window: Duration) -> Self {
+        self.windows.push((limit.max(1), window));
+        self
+    }
+
+    /// The smallest limit of any window.
     pub fn limit(&self) -> u32 {
-        self.limit
+        self.windows.iter().map(|(l, _)| *l).min().unwrap_or(1)
     }
 
     /// Holds every caller back for `wait`, e.g. when the server reports its
@@ -56,46 +62,77 @@ impl RateLimiter {
         }
     }
 
-    /// Waits until `cost` more units fit in the window, then records them.
-    /// A cost above the limit is capped at the limit so it can still run.
+    /// Waits until `cost` more units fit in every window, then records them.
+    /// A cost above the smallest limit is capped so it can still run.
     pub async fn acquire(&self, cost: u32) {
-        let cost = cost.clamp(1, self.limit);
+        // An hour-long wait is the most any window can ask for.
+        let _ = self
+            .acquire_within(cost, Duration::from_secs(24 * 3_600))
+            .await;
+    }
+
+    /// Like [`acquire`](Self::acquire), but gives up without recording
+    /// anything when the next wait would exceed `max_wait`, returning how
+    /// long it would have had to wait.
+    pub async fn acquire_within(&self, cost: u32, max_wait: Duration) -> Result<(), Duration> {
+        let cost = cost.clamp(1, self.limit());
         loop {
             let wait = {
                 let mut state = self.state.lock().await;
                 let now = Instant::now();
-                if let Some(until) = state.paused_until.filter(|t| *t > now) {
-                    drop(state);
-                    tokio::time::sleep_until(until).await;
-                    continue;
+                match state.paused_until.filter(|t| *t > now) {
+                    Some(until) => until - now,
+                    None => match self.wait_for(&mut state.log, now, cost) {
+                        Duration::ZERO => {
+                            state.log.push_back((now, cost));
+                            return Ok(());
+                        }
+                        wait => wait,
+                    },
                 }
-                let log = &mut state.log;
-                while log
-                    .front()
-                    .is_some_and(|(at, _)| now.duration_since(*at) >= self.window)
-                {
-                    log.pop_front();
-                }
-                let used: u32 = log.iter().map(|(_, c)| c).sum();
-                if used + cost <= self.limit {
-                    log.push_back((now, cost));
-                    return;
-                }
-                // Sleep until enough of the oldest calls leave the window.
-                let need = used + cost - self.limit;
-                let mut freed = 0;
-                let mut until = now;
-                for (at, c) in log.iter() {
-                    freed += c;
-                    until = *at + self.window;
-                    if freed >= need {
-                        break;
-                    }
-                }
-                until.saturating_duration_since(now)
             };
+            if wait > max_wait {
+                return Err(wait);
+            }
             tokio::time::sleep(wait).await;
         }
+    }
+
+    /// How long until `cost` fits in every window (zero when it fits now).
+    fn wait_for(&self, log: &mut VecDeque<(Instant, u32)>, now: Instant, cost: u32) -> Duration {
+        let longest = self
+            .windows
+            .iter()
+            .map(|(_, w)| *w)
+            .max()
+            .unwrap_or_default();
+        while log
+            .front()
+            .is_some_and(|(at, _)| now.duration_since(*at) >= longest)
+        {
+            log.pop_front();
+        }
+        let mut wait = Duration::ZERO;
+        for &(limit, window) in &self.windows {
+            let recent = log
+                .iter()
+                .filter(|(at, _)| now.duration_since(*at) < window);
+            let used: u32 = recent.clone().map(|(_, c)| c).sum();
+            if used + cost <= limit {
+                continue;
+            }
+            // Wait until enough of this window's oldest calls leave it.
+            let need = used + cost - limit;
+            let mut freed = 0;
+            for (at, c) in recent {
+                freed += c;
+                if freed >= need {
+                    wait = wait.max((*at + window).saturating_duration_since(now));
+                    break;
+                }
+            }
+        }
+        wait
     }
 }
 
@@ -126,6 +163,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn enforces_every_window() {
+        // Plenty per "minute", but only 3 units per "hour".
+        let limiter = RateLimiter::new(100, Duration::from_millis(50))
+            .with_window(3, Duration::from_secs(60));
+        assert_eq!(limiter.limit(), 3);
+        limiter.acquire(2).await;
+        limiter.acquire(1).await;
+        let refused = limiter
+            .acquire_within(1, Duration::from_millis(100))
+            .await
+            .unwrap_err();
+        assert!(refused > Duration::from_secs(50), "{refused:?}");
+    }
+
+    #[tokio::test]
     async fn pause_holds_every_caller() {
         let limiter = RateLimiter::new(100, Duration::from_secs(60));
         limiter.pause(Duration::from_millis(120)).await;
@@ -133,6 +185,13 @@ mod tests {
         let start = Instant::now();
         limiter.acquire(1).await;
         assert!(start.elapsed() >= Duration::from_millis(110));
+
+        limiter.pause(Duration::from_secs(30)).await;
+        let refused = limiter
+            .acquire_within(1, Duration::from_secs(1))
+            .await
+            .unwrap_err();
+        assert!(refused > Duration::from_secs(25));
     }
 
     #[tokio::test]

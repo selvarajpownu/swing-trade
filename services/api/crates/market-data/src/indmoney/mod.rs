@@ -22,7 +22,7 @@ use tokio::sync::RwLock;
 
 use crate::mcp::{snippet, McpClient, TokenSource};
 use crate::rate::RateLimiter;
-use crate::{names, Error, Interval, MarketData, Quote, Result};
+use crate::{names, Error, Interval, Market, MarketData, NewsItem, Quote, Result};
 
 pub use oauth::{login, token_source, FileTokenSource, LoginOptions, StoredToken};
 
@@ -37,9 +37,16 @@ const MAX_KEYS_PER_CALL: usize = 10;
 const MAX_NAMES_PER_CALL: usize = 10;
 /// IST is UTC+05:30.
 const IST_OFFSET_SECS: i64 = 19_800;
+/// How long a resolved MCX near-month contract is reused before looking it
+/// up again (contracts roll over at expiry).
+const MCX_KEY_TTL: Duration = Duration::from_secs(6 * 3_600);
 /// Default client-side budget in cost units per minute, a little under
 /// INDmoney's 60 so a mis-estimated tool cost does not trip the server limit.
 pub const DEFAULT_RATE_PER_MIN: u32 = 55;
+/// Default client-side budget per hour (INDmoney allows 500).
+pub const DEFAULT_RATE_PER_HOUR: u32 = 450;
+/// Longest a call waits for budget before failing with `RateLimited`.
+const MAX_LIMITER_WAIT: Duration = Duration::from_secs(8);
 /// INDmoney allows 60 cost units per minute across all tools (OHLC costs 2).
 /// A throttled call is retried this many times...
 const RATE_LIMIT_RETRIES: u32 = 2;
@@ -55,6 +62,8 @@ pub struct IndmoneyProvider {
     learned_costs: std::sync::Mutex<HashMap<String, u32>>,
     /// Upper-case symbol → ind_key.
     keys: RwLock<HashMap<String, String>>,
+    /// `MCX:SYMBOL` → (near-month future's ind_key, when resolved).
+    mcx_keys: RwLock<HashMap<String, (String, std::time::Instant)>>,
 }
 
 impl IndmoneyProvider {
@@ -62,15 +71,22 @@ impl IndmoneyProvider {
     pub fn new(mcp_url: impl Into<String>, tokens: Arc<dyn TokenSource>) -> Result<Self> {
         Ok(Self {
             mcp: McpClient::new(ID, mcp_url, tokens)?,
-            limiter: Arc::new(RateLimiter::per_minute(DEFAULT_RATE_PER_MIN)),
+            limiter: Arc::new(
+                RateLimiter::per_minute(DEFAULT_RATE_PER_MIN)
+                    .with_window(DEFAULT_RATE_PER_HOUR, Duration::from_secs(3_600)),
+            ),
             learned_costs: std::sync::Mutex::new(HashMap::new()),
             keys: RwLock::new(HashMap::new()),
+            mcx_keys: RwLock::new(HashMap::new()),
         })
     }
 
-    /// Replaces the default budget of [`DEFAULT_RATE_PER_MIN`] units per minute.
-    pub fn with_rate_limit(mut self, units_per_minute: u32) -> Self {
-        self.limiter = Arc::new(RateLimiter::per_minute(units_per_minute));
+    /// Replaces the default budgets ([`DEFAULT_RATE_PER_MIN`] units per
+    /// minute, [`DEFAULT_RATE_PER_HOUR`] per hour).
+    pub fn with_rate_limit(mut self, per_minute: u32, per_hour: u32) -> Self {
+        self.limiter = Arc::new(
+            RateLimiter::per_minute(per_minute).with_window(per_hour, Duration::from_secs(3_600)),
+        );
         self
     }
 
@@ -80,7 +96,17 @@ impl IndmoneyProvider {
     async fn call(&self, tool: &str, arguments: Value) -> Result<Value> {
         let mut retries = 0;
         loop {
-            self.limiter.acquire(self.cost(tool)).await;
+            // Pages must not hang on a spent budget: give up after a short wait.
+            if let Err(wait) = self
+                .limiter
+                .acquire_within(self.cost(tool), MAX_LIMITER_WAIT)
+                .await
+            {
+                return Err(Error::RateLimited {
+                    provider: ID,
+                    retry_after: wait,
+                });
+            }
             let v = self.mcp.call_tool(tool, arguments.clone()).await?;
             match tool_error(&v) {
                 None => return Ok(v),
@@ -96,9 +122,10 @@ impl IndmoneyProvider {
                     let wait = Duration::from_secs(retry_after.max(1));
                     self.limiter.pause(wait).await;
                     if retries >= RATE_LIMIT_RETRIES || retry_after > MAX_RATE_LIMIT_WAIT_SECS {
-                        return Err(Error::Upstream {
+                        tracing::warn!(tool, retry_after, %message, "INDmoney rate limit");
+                        return Err(Error::RateLimited {
                             provider: ID,
-                            message: format!("{tool} rate limited: {message}"),
+                            retry_after: wait,
                         });
                     }
                     retries += 1;
@@ -213,10 +240,31 @@ impl IndmoneyProvider {
 
     /// `get_indian_stocks_details` for any number of keys, merged into one map.
     async fn details(&self, keys: &[String]) -> Result<Map<String, Value>> {
-        let parts = try_join_all(
-            keys.chunks(MAX_KEYS_PER_CALL)
-                .map(|chunk| self.call("get_indian_stocks_details", json!({ "ind_keys": chunk }))),
-        )
+        self.details_with(keys, &[]).await
+    }
+
+    /// Like [`details`](Self::details), with extra `segments` such as `news`.
+    async fn details_with(&self, keys: &[String], segments: &[&str]) -> Result<Map<String, Value>> {
+        self.keyed_calls("get_indian_stocks_details", "ind_keys", keys, segments)
+            .await
+    }
+
+    /// Calls a details tool keyed by `arg` in batches and merges the keyed replies.
+    async fn keyed_calls(
+        &self,
+        tool: &'static str,
+        arg: &str,
+        keys: &[String],
+        segments: &[&str],
+    ) -> Result<Map<String, Value>> {
+        let parts = try_join_all(keys.chunks(MAX_KEYS_PER_CALL).map(|chunk| {
+            let mut args = Map::new();
+            args.insert(arg.to_owned(), json!(chunk));
+            if !segments.is_empty() {
+                args.insert("segments".to_owned(), json!(segments));
+            }
+            self.call(tool, Value::Object(args))
+        }))
         .await?;
         let mut out = Map::new();
         for part in parts {
@@ -236,32 +284,16 @@ impl IndmoneyProvider {
                 }
                 // Plain text instead of JSON is how the server reports problems
                 // such as rate limits; fail so the fallback provider says why.
-                Value::String(text) => return Err(text_reply("get_indian_stocks_details", &text)),
-                other => tracing::warn!(response = %other, "unexpected details response"),
+                Value::String(text) => return Err(text_reply(tool, &text)),
+                other => tracing::warn!(tool, response = %other, "unexpected details response"),
             }
         }
         Ok(out)
     }
-}
 
-#[async_trait]
-impl MarketData for IndmoneyProvider {
-    fn id(&self) -> &'static str {
-        ID
-    }
-
-    async fn quotes(&self, symbols: &[String]) -> Result<Vec<Quote>> {
-        let mut wanted: Vec<String> = Vec::new();
-        for s in symbols {
-            let s = s.trim().to_ascii_uppercase();
-            if !s.is_empty() && !wanted.contains(&s) {
-                wanted.push(s);
-            }
-        }
-        if wanted.is_empty() {
-            return Ok(Vec::new());
-        }
-        let keys = self.resolve(&wanted).await?;
+    /// NSE quotes for bare symbols.
+    async fn in_quotes(&self, wanted: &[String]) -> Result<Vec<Quote>> {
+        let keys = self.resolve(wanted).await?;
         let ordered: Vec<(&String, &String)> = wanted
             .iter()
             .filter_map(|s| keys.get(s).map(|k| (s, k)))
@@ -279,7 +311,9 @@ impl MarketData for IndmoneyProvider {
         Ok(ordered
             .into_iter()
             .filter_map(|(symbol, key)| {
-                let quote = details.get(key).and_then(|d| parse_quote(symbol, d));
+                let quote = details
+                    .get(key)
+                    .and_then(|d| parse_quote_for(symbol, d, Market::In));
                 if quote.is_none() {
                     let reply = details.get(key).map_or_else(
                         || "no entry for this key".to_owned(),
@@ -292,28 +326,297 @@ impl MarketData for IndmoneyProvider {
             .collect())
     }
 
+    /// US quotes for `US:`-prefixed keys.
+    async fn us_quotes(&self, keys: &[String]) -> Result<Vec<Quote>> {
+        let bare: Vec<String> = keys.iter().map(|k| Market::split(k).1.to_owned()).collect();
+        let details = self
+            .keyed_calls("get_us_stocks_details", "symbols", &bare, &[])
+            .await?;
+        Ok(keys
+            .iter()
+            .zip(&bare)
+            .filter_map(|(key, symbol)| {
+                let entry = details.get(symbol)?;
+                if let Some(e) = entry.get("error") {
+                    tracing::warn!(%symbol, error = %e, "INDmoney has no US quote");
+                    return None;
+                }
+                parse_quote_for(key, entry, Market::Us)
+            })
+            .collect())
+    }
+
+    /// MCX quotes for `MCX:`-prefixed keys (near-month futures).
+    async fn mcx_quotes(&self, keys: &[String]) -> Result<Vec<Quote>> {
+        let resolved = self.resolve_mcx(keys).await?;
+        let mut ind_keys: Vec<String> = Vec::new();
+        for k in resolved.values() {
+            if !ind_keys.contains(k) {
+                ind_keys.push(k.clone());
+            }
+        }
+        if ind_keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let details = self.details(&ind_keys).await?;
+        Ok(keys
+            .iter()
+            .filter_map(|key| {
+                let entry = details.get(resolved.get(key)?)?;
+                parse_quote_for(key, entry, Market::Mcx)
+            })
+            .collect())
+    }
+
+    /// `MCX:GOLD` → ind_key of the near-month GOLD future. Cached for
+    /// [`MCX_KEY_TTL`] so contracts roll over after expiry.
+    async fn resolve_mcx(&self, keys: &[String]) -> Result<HashMap<String, String>> {
+        let mut found = HashMap::new();
+        let mut missing: Vec<&String> = Vec::new();
+        {
+            let cache = self.mcx_keys.read().await;
+            for k in keys {
+                match cache.get(k) {
+                    Some((ik, at)) if at.elapsed() < MCX_KEY_TTL => {
+                        found.insert(k.clone(), ik.clone());
+                    }
+                    _ if !missing.contains(&k) => missing.push(k),
+                    _ => {}
+                }
+            }
+        }
+        if missing.is_empty() {
+            return Ok(found);
+        }
+        let names: Vec<&str> = missing.iter().map(|k| Market::split(k).1).collect();
+        let lookups = try_join_all(names.chunks(MAX_NAMES_PER_CALL).map(|chunk| {
+            self.call(
+                "lookup_ind_keys",
+                json!({ "names": chunk, "filter_type": "IN_COMMODITY" }),
+            )
+        }))
+        .await?;
+        let mut fresh = Vec::new();
+        for item in lookups.iter().flat_map(lookup_items) {
+            let (Some(ik), Some(name)) = (
+                item.get("ind_key").and_then(Value::as_str),
+                item.get("name").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            let name = name.trim().to_ascii_uppercase();
+            for k in &missing {
+                let bare = Market::split(k).1;
+                if !found.contains_key(*k) && name.starts_with(&format!("{bare} ")) {
+                    found.insert((*k).clone(), ik.to_owned());
+                    fresh.push(((*k).clone(), ik.to_owned()));
+                }
+            }
+        }
+        if !fresh.is_empty() {
+            let mut cache = self.mcx_keys.write().await;
+            for (k, ik) in fresh {
+                cache.insert(k, (ik, std::time::Instant::now()));
+            }
+        }
+        Ok(found)
+    }
+
+    /// Daily (or weekly, aggregated) US candles; there is no intraday data.
+    async fn us_candles(&self, symbol: &str, interval: Interval) -> Result<Vec<Candle>> {
+        if interval == Interval::Min15 {
+            return Err(Error::Upstream {
+                provider: ID,
+                message: "15-minute candles are not available for US stocks".to_owned(),
+            });
+        }
+        let v = self
+            .call(
+                "get_us_stocks_ohlc",
+                json!({ "symbols": [symbol], "duration": "1y" }),
+            )
+            .await?;
+        let daily = parse_us_candles(&v, symbol)?;
+        Ok(match interval {
+            Interval::Week => crate::demo::weekly(&daily),
+            _ => daily,
+        })
+    }
+}
+
+#[async_trait]
+impl MarketData for IndmoneyProvider {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    async fn quotes(&self, symbols: &[String]) -> Result<Vec<Quote>> {
+        let mut wanted: Vec<String> = Vec::new();
+        for s in symbols {
+            let s = s.trim().to_ascii_uppercase();
+            if !s.is_empty() && !wanted.contains(&s) {
+                wanted.push(s);
+            }
+        }
+        let mut by_market: Vec<(Market, Vec<String>)> = Vec::new();
+        for key in &wanted {
+            let market = Market::split(key).0;
+            match by_market.iter_mut().find(|(m, _)| *m == market) {
+                Some((_, keys)) => keys.push(key.clone()),
+                None => by_market.push((market, vec![key.clone()])),
+            }
+        }
+        let mut quotes = Vec::new();
+        for (market, keys) in by_market {
+            quotes.extend(match market {
+                Market::In => self.in_quotes(&keys).await?,
+                Market::Us => self.us_quotes(&keys).await?,
+                Market::Mcx => self.mcx_quotes(&keys).await?,
+            });
+        }
+        quotes.sort_by_key(|q| wanted.iter().position(|w| *w == q.symbol));
+        Ok(quotes)
+    }
+
     async fn candles(&self, symbol: &str, interval: Interval) -> Result<Vec<Candle>> {
-        let symbol = symbol.trim().to_ascii_uppercase();
-        let keys = self.resolve(std::slice::from_ref(&symbol)).await?;
-        let key = keys
-            .get(&symbol)
-            .ok_or_else(|| Error::NotFound(symbol.clone()))?;
+        let key = symbol.trim().to_ascii_uppercase();
+        let (market, bare) = Market::split(&key);
+        let ind_key = match market {
+            Market::Us => return self.us_candles(bare, interval).await,
+            Market::In => self.resolve(std::slice::from_ref(&key)).await?.remove(&key),
+            Market::Mcx => self
+                .resolve_mcx(std::slice::from_ref(&key))
+                .await?
+                .remove(&key),
+        }
+        .ok_or_else(|| Error::NotFound(key.clone()))?;
         let (iv, lookback) = interval.indmoney_params();
         let v = self
             .call(
                 "get_indian_stocks_ohlc",
-                json!({ "ind_key": key, "interval": iv, "lookback": lookback }),
+                json!({ "ind_key": ind_key, "interval": iv, "lookback": lookback }),
             )
             .await?;
         parse_candles(&v)
     }
+
+    async fn news(&self, symbol: &str) -> Result<Vec<NewsItem>> {
+        let key = symbol.trim().to_ascii_uppercase();
+        let (market, bare) = Market::split(&key);
+        let entry = match market {
+            Market::Mcx => return Ok(Vec::new()),
+            Market::Us => self
+                .keyed_calls(
+                    "get_us_stocks_details",
+                    "symbols",
+                    &[bare.to_owned()],
+                    &["news"],
+                )
+                .await?
+                .remove(bare),
+            Market::In => {
+                let ind_key = self
+                    .resolve(std::slice::from_ref(&key))
+                    .await?
+                    .remove(&key)
+                    .ok_or_else(|| Error::NotFound(key.clone()))?;
+                self.details_with(std::slice::from_ref(&ind_key), &["news"])
+                    .await?
+                    .remove(&ind_key)
+            }
+        };
+        Ok(entry.as_ref().map(parse_news).unwrap_or_default())
+    }
+}
+
+/// Every object in a lookup reply (a bare array or an object wrapping arrays).
+fn lookup_items(v: &Value) -> Vec<&Value> {
+    match v {
+        Value::Array(items) => items.iter().collect(),
+        Value::Object(map) => map.values().filter_map(Value::as_array).flatten().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Parses `get_us_stocks_ohlc` (`prices.<SYMBOL>.candles[{date, ...}]`) into
+/// daily candles at 00:00 UTC, oldest first. Today's in-progress `today`
+/// row is left out: setups are read on completed daily bars.
+fn parse_us_candles(v: &Value, symbol: &str) -> Result<Vec<Candle>> {
+    if let Value::String(text) = v {
+        return Err(text_reply("get_us_stocks_ohlc", text));
+    }
+    let rows = v
+        .get("prices")
+        .and_then(|p| p.get(symbol))
+        .and_then(|s| s.get("candles"))
+        .and_then(Value::as_array)
+        .ok_or_else(|| Error::Decode {
+            provider: ID,
+            message: format!(
+                "US OHLC response has no candles for {symbol}: {}",
+                snippet(&v.to_string())
+            ),
+        })?;
+    let mut out: Vec<Candle> = rows
+        .iter()
+        .filter_map(|r| {
+            let date = r.get("date").and_then(Value::as_str)?;
+            let day = chrono::NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d").ok()?;
+            let ts = day.and_hms_opt(0, 0, 0)?.and_utc().timestamp();
+            Some(Candle::new(
+                ts,
+                num(r, "open")?,
+                num(r, "high")?,
+                num(r, "low")?,
+                num(r, "close")?,
+                num(r, "volume").unwrap_or(0.0),
+            ))
+        })
+        .collect();
+    out.sort_by_key(|c| c.ts);
+    out.dedup_by_key(|c| c.ts);
+    Ok(out)
+}
+
+/// Headlines from a details entry's `news` array. Titles end in
+/// `" - 09 Nov, 2026"`, which becomes `published_at`.
+fn parse_news(entry: &Value) -> Vec<NewsItem> {
+    let Some(items) = entry.get("news").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|n| {
+            let raw = text(Some(n), "title")?;
+            let (title, published_at) = match raw.rsplit_once(" - ") {
+                Some((head, tail)) => {
+                    match chrono::NaiveDate::parse_from_str(tail.trim(), "%d %b, %Y") {
+                        Ok(d) => (
+                            head.trim().to_owned(),
+                            Some(d.format("%Y-%m-%d").to_string()),
+                        ),
+                        Err(_) => (raw.to_owned(), None),
+                    }
+                }
+                None => (raw.to_owned(), None),
+            };
+            Some(NewsItem {
+                title,
+                summary: text(Some(n), "description").map(str::to_owned),
+                sentiment: text(Some(n), "sentiment").map(str::to_ascii_lowercase),
+                published_at,
+                source: None,
+                url: None,
+            })
+        })
+        .collect()
 }
 
 /// Cost units INDmoney charges per call. OHLC's cost (2) is what its
 /// rate-limit replies report; the others are assumed to cost 1.
 fn tool_cost(tool: &str) -> u32 {
     match tool {
-        "get_indian_stocks_ohlc" => 2,
+        "get_indian_stocks_ohlc" | "get_us_stocks_ohlc" => 2,
         _ => 1,
     }
 }
@@ -435,7 +738,7 @@ fn text<'a>(v: Option<&'a Value>, key: &str) -> Option<&'a str> {
 }
 
 /// Builds a [`Quote`] from one `get_indian_stocks_details` entry.
-fn parse_quote(symbol: &str, entry: &Value) -> Option<Quote> {
+fn parse_quote_for(symbol: &str, entry: &Value, market: Market) -> Option<Quote> {
     let basic = entry.get("entity_basic");
     let stats = entry.get("entity_stats")?;
     let price = num(stats, "live_price")?;
@@ -459,14 +762,22 @@ fn parse_quote(symbol: &str, entry: &Value) -> Option<Quote> {
             .or_else(|| text(basic, "name"))
             .unwrap_or(symbol)
             .to_owned(),
-        exchange: text(basic, "exchange").unwrap_or("NSE").to_owned(),
+        exchange: text(basic, "exchange")
+            .or_else(|| text(basic, "exchange_name"))
+            .unwrap_or(market.exchange())
+            .to_owned(),
         price,
         change,
         change_pct,
         day_high,
         day_low,
-        high_52w: num(stats, "52week_high").unwrap_or(day_high),
-        low_52w: num(stats, "52week_low").unwrap_or(day_low),
+        // MCX futures report 0 for both; treat that as missing.
+        high_52w: num(stats, "52week_high")
+            .filter(|v| *v > 0.0)
+            .unwrap_or(day_high),
+        low_52w: num(stats, "52week_low")
+            .filter(|v| *v > 0.0)
+            .unwrap_or(day_low),
         volume: num(stats, "volume").unwrap_or(0.0),
         updated_at: text(Some(stats), "price_updated_at_ist").map(str::to_owned),
     })
@@ -561,6 +872,53 @@ fn parse_candles(v: &Value) -> Result<Vec<Candle>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_quote(symbol: &str, entry: &Value) -> Option<Quote> {
+        parse_quote_for(symbol, entry, Market::In)
+    }
+
+    #[test]
+    fn parses_us_and_mcx_replies() {
+        let us = json!({"prices": {"AAPL": {"count": 2, "candles": [
+            {"date": "2026-11-09", "open": 345.0, "high": 352.33, "low": 344.78, "close": 350.69, "volume": 48716842},
+            {"date": "2026-11-06", "open": 338.73, "high": 345.79, "low": 338.3, "close": 342.37, "volume": 44703806}
+        ], "today": {"date": "2026-11-10", "open": 351.3, "high": 353.8, "low": 346.48, "last": 348.27}}}});
+        let c = parse_us_candles(&us, "AAPL").unwrap();
+        assert_eq!(c.len(), 2, "today's partial row is left out");
+        assert_eq!(c[1].ts, 1_794_182_400); // 2026-11-09 00:00 UTC
+        assert_eq!(c[1].close, 350.69);
+        assert!(parse_us_candles(&us, "MSFT").is_err());
+
+        let aapl = json!({"entity_basic": {"short_name": "Apple", "symbol": "AAPL", "exchange_name": "US"},
+            "entity_stats": {"live_price": 348.27, "day_change": -2.42, "prev_close": 350.69, "52week_high": 355.38}});
+        let q = parse_quote_for("US:AAPL", &aapl, Market::Us).unwrap();
+        assert_eq!(
+            (q.symbol.as_str(), q.name.as_str(), q.exchange.as_str()),
+            ("US:AAPL", "Apple", "US")
+        );
+
+        let gold = json!({"entity_basic": {"short_name": "GOLD 04 Dec Fut", "exchange": "MCX"},
+            "entity_stats": {"live_price": 140645, "day_high": 142500, "day_low": 140358, "52week_high": 0, "52week_low": 0}});
+        let q = parse_quote_for("MCX:GOLD", &gold, Market::Mcx).unwrap();
+        assert_eq!((q.high_52w, q.low_52w), (142_500.0, 140_358.0));
+    }
+
+    #[test]
+    fn parses_news_titles_and_dates() {
+        let entry = json!({"news": [
+            {"title": "ACE Secures Defence Order, Shares Rise 3% - 30 Sep, 2026", "description": "Order for 74 backhoe loaders.", "sentiment": "Positive"},
+            {"title": "No date here", "sentiment": "neutral"},
+            {"description": "no title"}
+        ]});
+        let news = parse_news(&entry);
+        assert_eq!(news.len(), 2);
+        assert_eq!(news[0].title, "ACE Secures Defence Order, Shares Rise 3%");
+        assert_eq!(news[0].published_at.as_deref(), Some("2026-09-30"));
+        assert_eq!(news[0].sentiment.as_deref(), Some("positive"));
+        assert_eq!(news[1].title, "No date here");
+        assert_eq!(news[1].published_at, None);
+        assert!(parse_news(&json!({})).is_empty());
+    }
 
     #[test]
     fn parses_ist_timestamps() {

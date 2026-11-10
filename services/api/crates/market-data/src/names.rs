@@ -21,6 +21,37 @@ const NAMES: &[(&str, &str)] = &[
     ("TIPSMUSIC", "Tips Music"),
 ];
 
+const US_NAMES: &[(&str, &str)] = &[
+    ("AAPL", "Apple"),
+    ("AMZN", "Amazon"),
+    ("GOOGL", "Alphabet"),
+    ("META", "Meta Platforms"),
+    ("MSFT", "Microsoft"),
+    ("NVDA", "NVIDIA"),
+    ("TSLA", "Tesla"),
+];
+
+const MCX_NAMES: &[(&str, &str)] = &[
+    ("COPPER", "Copper"),
+    ("CRUDEOIL", "Crude Oil"),
+    ("GOLD", "Gold"),
+    ("NATURALGAS", "Natural Gas"),
+    ("SILVER", "Silver"),
+];
+
+/// Display name for a symbol in `market`, falling back to the symbol.
+pub(crate) fn display_name(market: crate::Market, symbol: &str) -> String {
+    let table = match market {
+        crate::Market::In => NAMES,
+        crate::Market::Us => US_NAMES,
+        crate::Market::Mcx => MCX_NAMES,
+    };
+    table
+        .iter()
+        .find(|(s, _)| s.eq_ignore_ascii_case(symbol))
+        .map_or_else(|| symbol.to_owned(), |(_, n)| (*n).to_owned())
+}
+
 /// Company name for a known symbol (case-insensitive).
 pub(crate) fn company_name(symbol: &str) -> Option<&'static str> {
     NAMES
@@ -41,5 +72,8 @@ mod tests {
             Some("Multi Commodity Exchange of India")
         );
         assert_eq!(company_name("UNKNOWN"), None);
+        assert_eq!(display_name(crate::Market::Us, "aapl"), "Apple");
+        assert_eq!(display_name(crate::Market::Mcx, "GOLD"), "Gold");
+        assert_eq!(display_name(crate::Market::Us, "XYZ"), "XYZ");
     }
 }

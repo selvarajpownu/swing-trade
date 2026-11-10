@@ -96,6 +96,7 @@ impl From<market_data::Error> for ApiError {
                  run `swing-api login {provider}` on the server"
             )),
             E::Io(io) => ApiError::Internal(format!("io error: {io}")),
+            other @ E::RateLimited { .. } => ApiError::Upstream(other.to_string()),
             other @ (E::Upstream { .. }
             | E::Decode { .. }
             | E::Http(_)

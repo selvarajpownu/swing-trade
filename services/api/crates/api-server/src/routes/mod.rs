@@ -1,6 +1,7 @@
 //! HTTP routes and middleware stack.
 
 pub mod health;
+pub mod news;
 pub mod scan;
 pub mod stocks;
 
@@ -30,6 +31,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     let v1 = Router::new()
         .route("/stocks", get(stocks::list))
         .route("/stocks/{symbol}", get(stocks::detail))
+        .route("/stocks/{symbol}/news", get(stocks::news))
+        .route("/news", get(news::headlines))
         .route("/scan", get(scan::list))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
@@ -288,6 +291,57 @@ mod tests {
 
         let bad = call("/v1/scan?preset=nope").await.unwrap();
         assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn serves_us_and_commodity_markets() {
+        let us = json(get("/v1/stocks?market=us", Some(TOKEN)).await).await;
+        assert_eq!(us["market"], "us");
+        assert_eq!(us["currency"], "USD");
+        let symbols: Vec<&str> = us["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["symbol"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            symbols,
+            vec!["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN", "META", "TSLA"]
+        );
+        assert_eq!(us["items"][0]["name"], "Apple");
+
+        let mcx = json(get("/v1/stocks?market=mcx", Some(TOKEN)).await).await;
+        assert_eq!(mcx["currency"], "INR");
+        for item in mcx["items"].as_array().unwrap() {
+            assert!(!item["symbol"].as_str().unwrap().contains(':'));
+            if !item["setup"].is_null() {
+                assert!(
+                    item["setup"]["quantity"].is_null(),
+                    "MCX plans have no quantity"
+                );
+            }
+        }
+
+        let aapl = json(get("/v1/stocks/aapl?market=us&interval=1w", Some(TOKEN)).await).await;
+        assert_eq!(aapl["quote"]["symbol"], "AAPL");
+        assert_eq!(aapl["quote"]["exchange"], "US");
+        assert_eq!(aapl["currency"], "USD");
+        let gold = json(get("/v1/stocks/GOLD?market=mcx", Some(TOKEN)).await).await;
+        assert_eq!(gold["market"], "mcx");
+        if !gold["setup"].is_null() {
+            assert!(gold["setup"]["quantity"].is_null());
+        }
+
+        let resp = get("/v1/stocks/AAPL?market=us&interval=15m", Some(TOKEN)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        let resp = get("/v1/stocks?market=lse", Some(TOKEN)).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        // Demo has no news: an empty list, never invented headlines.
+        let news = json(get("/v1/stocks/AAPL/news?market=us", Some(TOKEN)).await).await;
+        assert_eq!(news["provider"], "demo");
+        assert_eq!(news["symbol"], "AAPL");
+        assert_eq!(news["items"], serde_json::json!([]));
     }
 
     #[tokio::test]

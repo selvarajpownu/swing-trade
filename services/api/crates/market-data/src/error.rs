@@ -8,6 +8,13 @@ pub enum Error {
     #[error("{provider} is not authorised; run `swing-api login {provider}`")]
     Unauthorized { provider: &'static str },
 
+    /// The provider's request budget is spent; try again after `retry_after`.
+    #[error("{provider} is rate limited; try again in {}s", retry_after.as_secs().max(1))]
+    RateLimited {
+        provider: &'static str,
+        retry_after: std::time::Duration,
+    },
+
     #[error("upstream {provider} error: {message}")]
     Upstream {
         provider: &'static str,

@@ -12,6 +12,7 @@ use swing_core::Candle;
 
 use crate::cache::TtlCache;
 use crate::config::Config;
+use crate::news::{GoogleNews, NEWS_TTL};
 use crate::scan::Scanner;
 
 /// A cached quote lookup: `None` remembers that the provider has no such symbol.
@@ -33,7 +34,14 @@ pub struct AppState {
     pub candles: Arc<TtlCache<(String, Interval), CachedCandles>>,
     /// Background scan results for `GET /v1/scan`.
     pub scanner: Arc<Scanner>,
+    /// Provider headlines per market-qualified symbol, with their source.
+    pub news: Arc<TtlCache<String, CachedNews>>,
+    /// Google News RSS client for the Stock news page.
+    pub google: Arc<GoogleNews>,
 }
+
+/// Cached provider headlines and the provider that served them.
+pub type CachedNews = (Arc<Vec<market_data::NewsItem>>, &'static str);
 
 impl AppState {
     /// State with caches sized from `config`.
@@ -49,6 +57,8 @@ impl AppState {
         // Scans read only the primary provider; never a fallback.
         let primary = market.ids().first().copied().unwrap_or("demo");
         Self {
+            news: Arc::new(TtlCache::new(NEWS_TTL, 1_000)),
+            google: Arc::new(GoogleNews::new()),
             scanner: Arc::new(Scanner::new(primary)),
             config: Arc::new(config),
             market: Arc::new(market),
@@ -182,7 +192,10 @@ pub fn build_market(config: &Config) -> anyhow::Result<FallbackProvider> {
             indmoney::ID => match indmoney::token_source(&config.indmoney_token_file) {
                 Some(tokens) => {
                     let provider = IndmoneyProvider::new(config.indmoney_mcp_url.clone(), tokens)?
-                        .with_rate_limit(config.indmoney_rate_per_min);
+                        .with_rate_limit(
+                            config.indmoney_rate_per_min,
+                            config.indmoney_rate_per_hour,
+                        );
                     providers.push(Arc::new(provider));
                 }
                 None => tracing::warn!(

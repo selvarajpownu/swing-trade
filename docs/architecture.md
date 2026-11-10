@@ -43,7 +43,11 @@ pub trait MarketData: Send + Sync {
 ```
 
 - **INDmoney** talks to the INDmoney MCP server (`INDMONEY_MCP_URL`) with an OAuth access token. `swing-api login indmoney` runs the login once and stores the token in `INDMONEY_TOKEN_FILE`; `INDMONEY_ACCESS_TOKEN` overrides the file.
-- **INDmoney rate limit:** 60 cost units per minute across all tools (`get_indian_stocks_ohlc` costs 2). A throttled call returns `{"error":"rate_limit_exceeded","retry_after_seconds":N,...}`; the provider waits and retries when N ≤ 5 s (twice at most), otherwise it fails with `Upstream` and the fallback answers. Login requests only the read scopes INDmoney advertises (write scopes such as `insights:write` are dropped).
+- **Markets:** `market=in|us|mcx` on the stock routes. Providers receive market-qualified keys (`ACE`, `US:AAPL`,
+  `MCX:GOLD`; see `Market::key`). US data comes from INDmoney's US tools (daily candles only; weekly is aggregated,
+  15m is refused). MCX symbols resolve to the near-month future (`lookup_ind_keys` with `IN_COMMODITY`, cached 6 h).
+- **INDmoney rate limits:** 60 cost units per minute **and 500 per hour** across all tools (OHLC costs 2). A throttled call returns `{"error":"rate_limit_exceeded","retry_after_seconds":N,...}`; the provider waits and retries when N ≤ 5 s (twice at most), otherwise it fails with `Upstream` and the fallback answers. Login requests only the read scopes INDmoney advertises (write scopes such as `insights:write` are dropped). A call never waits more than 8 s for budget: it fails with
+  `RateLimited` instead, so pages answer promptly, while the scanner waits and retries.
 - **Demo** generates sample data so the app works with no account. Prices are not real.
 - **Caching across providers:** candles from the first provider in `DATA_PROVIDERS` are cached for `CANDLE_TTL_SECS`; candles served by a fallback are cached only for `QUOTE_TTL_SECS`, so real data returns quickly after a hiccup.
 - Adding a source (e.g. Kite Connect in phase 5) means one new type implementing the trait and one new id in `DATA_PROVIDERS`. See [ADR 0004](decisions/0004-pluggable-market-data.md).
