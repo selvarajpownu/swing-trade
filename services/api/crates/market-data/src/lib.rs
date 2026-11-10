@@ -10,6 +10,7 @@ mod fallback;
 pub mod indmoney;
 pub mod mcp;
 mod names;
+pub mod rate;
 mod types;
 
 pub use demo::DemoProvider;
@@ -17,6 +18,7 @@ pub use error::{Error, Result};
 pub use fallback::FallbackProvider;
 pub use indmoney::IndmoneyProvider;
 pub use mcp::{StaticToken, TokenSource};
+pub use rate::RateLimiter;
 pub use types::{Interval, ParseIntervalError, Quote};
 
 use async_trait::async_trait;

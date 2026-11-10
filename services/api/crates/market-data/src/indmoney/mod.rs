@@ -21,6 +21,7 @@ use swing_core::Candle;
 use tokio::sync::RwLock;
 
 use crate::mcp::{snippet, McpClient, TokenSource};
+use crate::rate::RateLimiter;
 use crate::{names, Error, Interval, MarketData, Quote, Result};
 
 pub use oauth::{login, token_source, FileTokenSource, LoginOptions, StoredToken};
@@ -36,6 +37,9 @@ const MAX_KEYS_PER_CALL: usize = 10;
 const MAX_NAMES_PER_CALL: usize = 10;
 /// IST is UTC+05:30.
 const IST_OFFSET_SECS: i64 = 19_800;
+/// Default client-side budget in cost units per minute, a little under
+/// INDmoney's 60 so a mis-estimated tool cost does not trip the server limit.
+pub const DEFAULT_RATE_PER_MIN: u32 = 55;
 /// INDmoney allows 60 cost units per minute across all tools (OHLC costs 2).
 /// A throttled call is retried this many times...
 const RATE_LIMIT_RETRIES: u32 = 2;
@@ -45,6 +49,10 @@ const MAX_RATE_LIMIT_WAIT_SECS: u64 = 5;
 /// Quotes and candles from INDmoney. Read-only; never places orders.
 pub struct IndmoneyProvider {
     mcp: McpClient,
+    /// Shared by every tool call, so page requests and scans share one budget.
+    limiter: Arc<RateLimiter>,
+    /// Tool costs learned from INDmoney's rate-limit replies (tool → units).
+    learned_costs: std::sync::Mutex<HashMap<String, u32>>,
     /// Upper-case symbol → ind_key.
     keys: RwLock<HashMap<String, String>>,
 }
@@ -54,8 +62,16 @@ impl IndmoneyProvider {
     pub fn new(mcp_url: impl Into<String>, tokens: Arc<dyn TokenSource>) -> Result<Self> {
         Ok(Self {
             mcp: McpClient::new(ID, mcp_url, tokens)?,
+            limiter: Arc::new(RateLimiter::per_minute(DEFAULT_RATE_PER_MIN)),
+            learned_costs: std::sync::Mutex::new(HashMap::new()),
             keys: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Replaces the default budget of [`DEFAULT_RATE_PER_MIN`] units per minute.
+    pub fn with_rate_limit(mut self, units_per_minute: u32) -> Self {
+        self.limiter = Arc::new(RateLimiter::per_minute(units_per_minute));
+        self
     }
 
     /// Calls an MCP tool, waiting out short rate-limit replies. Any other
@@ -64,22 +80,29 @@ impl IndmoneyProvider {
     async fn call(&self, tool: &str, arguments: Value) -> Result<Value> {
         let mut retries = 0;
         loop {
+            self.limiter.acquire(self.cost(tool)).await;
             let v = self.mcp.call_tool(tool, arguments.clone()).await?;
             match tool_error(&v) {
                 None => return Ok(v),
                 Some(ToolError::RateLimited {
                     retry_after,
+                    cost,
                     message,
-                }) if retries < RATE_LIMIT_RETRIES && retry_after <= MAX_RATE_LIMIT_WAIT_SECS => {
+                }) => {
+                    if let Some(cost) = cost {
+                        self.learn_cost(tool, cost);
+                    }
+                    // Hold every caller (scanner and pages) until the server is ready.
+                    let wait = Duration::from_secs(retry_after.max(1));
+                    self.limiter.pause(wait).await;
+                    if retries >= RATE_LIMIT_RETRIES || retry_after > MAX_RATE_LIMIT_WAIT_SECS {
+                        return Err(Error::Upstream {
+                            provider: ID,
+                            message: format!("{tool} rate limited: {message}"),
+                        });
+                    }
                     retries += 1;
                     tracing::debug!(tool, retry_after, %message, "INDmoney rate limit; waiting");
-                    tokio::time::sleep(Duration::from_secs(retry_after.max(1))).await;
-                }
-                Some(ToolError::RateLimited { message, .. }) => {
-                    return Err(Error::Upstream {
-                        provider: ID,
-                        message: format!("{tool} rate limited: {message}"),
-                    })
                 }
                 Some(ToolError::Other(message)) => {
                     return Err(Error::Upstream {
@@ -88,6 +111,28 @@ impl IndmoneyProvider {
                     })
                 }
             }
+        }
+    }
+
+    /// Units to reserve for one call of `tool`.
+    fn cost(&self, tool: &str) -> u32 {
+        let learned = self
+            .learned_costs
+            .lock()
+            .ok()
+            .and_then(|m| m.get(tool).copied());
+        learned.unwrap_or_else(|| tool_cost(tool))
+    }
+
+    /// Remembers a higher cost reported by the server for `tool`.
+    fn learn_cost(&self, tool: &str, cost: u32) {
+        let Ok(mut costs) = self.learned_costs.lock() else {
+            return;
+        };
+        let known = costs.get(tool).copied().unwrap_or_else(|| tool_cost(tool));
+        if cost > known {
+            tracing::info!(tool, cost, "learned INDmoney tool cost");
+            costs.insert(tool.to_owned(), cost);
         }
     }
 
@@ -264,12 +309,23 @@ impl MarketData for IndmoneyProvider {
     }
 }
 
+/// Cost units INDmoney charges per call. OHLC's cost (2) is what its
+/// rate-limit replies report; the others are assumed to cost 1.
+fn tool_cost(tool: &str) -> u32 {
+    match tool {
+        "get_indian_stocks_ohlc" => 2,
+        _ => 1,
+    }
+}
+
 /// An error reported inside a successful `tools/call` result.
 #[derive(Debug, PartialEq)]
 enum ToolError {
     /// `{"error":"rate_limit_exceeded","retry_after_seconds":1,"message":...}`
     RateLimited {
         retry_after: u64,
+        /// What the server says the rejected call costs.
+        cost: Option<u32>,
         message: String,
     },
     Other(String),
@@ -293,8 +349,13 @@ fn tool_error(v: &Value) -> Option<ToolError> {
             .get("retry_after_seconds")
             .and_then(Value::as_u64)
             .unwrap_or(1);
+        let cost = map
+            .get("cost")
+            .and_then(Value::as_u64)
+            .and_then(|c| u32::try_from(c).ok());
         ToolError::RateLimited {
             retry_after,
+            cost,
             message,
         }
     } else {
@@ -637,6 +698,7 @@ mod tests {
             tool_error(&limited),
             Some(ToolError::RateLimited {
                 retry_after: 2,
+                cost: Some(2),
                 message: "Rate limit exceeded: 60 calls per min. Try again in 2s.".to_owned()
             })
         );
