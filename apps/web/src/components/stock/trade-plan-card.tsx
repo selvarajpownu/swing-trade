@@ -124,7 +124,7 @@ export function TradePlanCard({ symbol, setup, plan }: TradePlanCardProps) {
           <span className="text-down tabular-nums">{formatINRWhole(maxLoss)}</span>.{" "}
           {setup.target_from_zone
             ? "Target is the next resistance zone."
-            : "Target uses a fixed reward multiple (no resistance zone above)."}
+            : "Target is entry + 2R (no resistance zone at least 1R above entry)."}
         </p>
 
         {setup.reasons.length > 0 ? (
