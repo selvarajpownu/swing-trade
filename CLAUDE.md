@@ -50,6 +50,11 @@ Windows: `scripts\dev.ps1`. Tests: `cargo test` (services/api), `npm run typeche
 
 ## Status (10 Nov 2026, first Claude Code session)
 
+**Phase 2 progress (same day):** background scanner (`GET /v1/scan`, `api-server/src/{scan,store,universe}.rs`), Scanner
+page, Home "Top setups" (never "recommended": wording rule), shared INDmoney rate limiter that learns tool costs
+(`market-data/src/rate.rs`), golden preset tests on real candles. Next: IN Stock / US Stock / Commodity / Stock news
+sections (see docs/roadmap.md Phase 2 "Next").
+
 Phase 1 (list + chart MVP) **builds, passes all checks and runs end to end on real INDmoney data** (Windows 11,
 Rust 1.90, Node 24).
 - Rust: `cargo build`, `cargo test` (76 tests: 34 api-server, 34 market-data, 8 swing-core incl. the owner's card

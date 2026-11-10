@@ -2,19 +2,29 @@
 
 The app stays view and analysis only in every phase ([ADR 0003](decisions/0003-view-only-no-orders.md)).
 
-## Phase 1 — List & chart MVP (current)
+## Phase 1 — List & chart MVP (done, 10 Nov 2026)
 
 - Rust API with `/health`, `/v1/stocks`, `/v1/stocks/{symbol}` ([api.md](api.md)), bearer-token auth, in-memory caches.
 - Market-data connectors: INDmoney MCP (OAuth login via `swing-api login indmoney`) and demo, with fallback.
 - Web: watchlist table with sparklines; stock page with candles (1d / 1w / 15m), SMA 20/50/200, zones and the setup card.
 - Docker Compose, CI, free hosting docs.
 
-## Phase 2 — Swing engine
+## Phase 2 — Swing engine (in progress)
 
-- Scanner over the presets: pullback, breakout, support bounce, oversold.
-- 0-100 score (30 trend + 30 closeness + 15 volume + 15 risk-reward + 10 quality) with plain-language reasons.
-- Trade plan card: entry just above the setup bar high, stop below nearest support (at least 1 ATR), target at next resistance or 2R, quantity = capital × risk ÷ (entry − stop).
-- Capital and risk adjustable from the UI.
+Already in phase 1: the four presets, the 0-100 score with reasons, the trade-plan card, capital and risk from the UI.
+
+Done:
+- Background scanner over a universe (`UNIVERSE_FILE` / `UNIVERSE` / `WATCHLIST`; NSE constituent CSVs such as the
+  Nifty 500 work as downloaded), `GET /v1/scan` with preset / score / R:R / state filters, Scanner page, Home "Top setups".
+- Daily-candle file store (`.data/candles`, refreshed once per session) and a shared INDmoney rate limiter that learns
+  tool costs from the server's rate-limit replies.
+- Golden preset tests on recorded real candles (`swing-core/tests/presets_real.rs`).
+
+Next (owner's order, 10 Nov 2026):
+- Navigation: **IN Stock** (today's list), **US Stock**, **Commodity** (MCX futures), **Stock news**, with layouts
+  inspired by Google Finance (market tabs, big price header with range tabs, two-column stock page, compact news rows).
+- US stocks and MCX commodities through INDmoney's MCP, with the same list, chart, setups and trade plan.
+- Stock news from Google News RSS, fetched and cached by the API (headlines and links; AI summaries stay in phase 4).
 
 ## Phase 3 — Data
 
