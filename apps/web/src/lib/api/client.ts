@@ -5,7 +5,7 @@
 import { ApiError } from "./errors";
 import type { PlanParams } from "./params";
 import { DEFAULT_CAPITAL, DEFAULT_RISK_PCT } from "./params";
-import type { Interval, StockDetailResponse, StocksResponse } from "./types";
+import type { Interval, ScanResponse, StockDetailResponse, StocksResponse } from "./types";
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let response: Response;
@@ -53,6 +53,10 @@ export function stockUrl(symbol: string, interval: Interval, plan?: PlanParams):
 
 export function fetchStocks(url: string, signal?: AbortSignal): Promise<StocksResponse> {
   return fetchJson<StocksResponse>(url, signal);
+}
+
+export function fetchScan(url: string, signal?: AbortSignal): Promise<ScanResponse> {
+  return fetchJson<ScanResponse>(url, signal);
 }
 
 export function fetchStock(url: string, signal?: AbortSignal): Promise<StockDetailResponse> {

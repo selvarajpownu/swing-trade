@@ -1,7 +1,15 @@
 import "server-only";
 
 import { ApiError } from "./errors";
-import type { Interval, HealthResponse, StockDetailResponse, StocksResponse } from "./types";
+import type {
+  Interval,
+  HealthResponse,
+  ScanResponse,
+  SetupPreset,
+  SetupState,
+  StockDetailResponse,
+  StocksResponse,
+} from "./types";
 
 /**
  * Server-side client for the Rust API (services/api).
@@ -34,6 +42,17 @@ export interface GetStocksParams {
 
 export interface GetStockParams {
   interval?: Interval;
+  capital?: number;
+  /** Risk per trade in PERCENT (1 = 1%). Converted to a fraction for the API. */
+  riskPct?: number;
+}
+
+export interface GetScanParams {
+  preset?: SetupPreset;
+  minScore?: number;
+  minRr?: number;
+  state?: SetupState;
+  limit?: number;
   capital?: number;
   /** Risk per trade in PERCENT (1 = 1%). Converted to a fraction for the API. */
   riskPct?: number;
@@ -152,6 +171,24 @@ export async function getStock(
     },
     zones: Array.isArray(data.zones) ? data.zones : [],
   };
+}
+
+/** GET /v1/scan */
+export async function getScan(params: GetScanParams = {}): Promise<ScanResponse> {
+  const data = await request<ScanResponse>("/v1/scan", {
+    query: {
+      preset: params.preset,
+      min_score: params.minScore || undefined,
+      min_rr: params.minRr || undefined,
+      state: params.state,
+      limit: params.limit,
+      capital: params.capital,
+      risk: riskFraction(params.riskPct),
+    },
+  });
+  assertShape(Array.isArray(data.items), "`items`");
+  assertShape(typeof data.status === "object" && data.status !== null, "`status`");
+  return data;
 }
 
 /** GET /health (no auth). */

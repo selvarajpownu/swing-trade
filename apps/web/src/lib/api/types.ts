@@ -136,6 +136,38 @@ export interface StockDetailResponse {
   setup: SetupDetail | null;
 }
 
+/** GET /v1/scan */
+export type ScanPhase = "pending" | "running" | "idle";
+
+export interface ScanStatus {
+  state: ScanPhase;
+  universe_size: number;
+  scanned: number;
+  failed: string[];
+  excluded: string[];
+  started_at: string | null;
+  finished_at: string | null;
+  next_run_at: string | null;
+}
+
+/** A scanner row: list fields from the latest daily bar plus its best matching setup. */
+export interface ScanItem extends StockListItem {
+  industry: string | null;
+  /** Unix seconds of the latest daily bar. */
+  bar_time: number;
+  /** Every preset firing on the latest bar. */
+  presets: SetupPreset[];
+  setup: SetupSummary;
+}
+
+export interface ScanResponse {
+  provider: ProviderName;
+  status: ScanStatus;
+  /** Matching rows before `limit`. */
+  total: number;
+  items: ScanItem[];
+}
+
 export interface HealthResponse {
   status: string;
   version: string;

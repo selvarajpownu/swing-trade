@@ -1,4 +1,4 @@
-import { Bookmark, House, List, NotebookPen, Settings, type LucideIcon } from "lucide-react";
+import { Bookmark, House, List, NotebookPen, Radar, Settings, type LucideIcon } from "lucide-react";
 
 export interface NavItem {
   href: string;
@@ -13,6 +13,7 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/", label: "Home", shortLabel: "Home", icon: House, exact: true },
   { href: "/stocks", label: "Stock list", shortLabel: "Stocks", icon: List },
+  { href: "/scan", label: "Scanner", shortLabel: "Scanner", icon: Radar },
   { href: "/watchlists", label: "Watchlists", shortLabel: "Watchlists", icon: Bookmark },
   { href: "/journal", label: "Journal", shortLabel: "Journal", icon: NotebookPen },
   { href: "/settings", label: "Settings", shortLabel: "Settings", icon: Settings },
