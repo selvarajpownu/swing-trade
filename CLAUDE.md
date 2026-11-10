@@ -48,28 +48,40 @@ cd apps/web && npm install && npm run dev                    # :3000
 
 Windows: `scripts\dev.ps1`. Tests: `cargo test` (services/api), `npm run typecheck && npm run lint` (apps/web).
 
-## Status (end of planning chat)
+## Status (10 Nov 2026, first Claude Code session)
 
-Phase 1 (list + chart MVP) code is **written but never built**: the planning environment had no network, so no
-crates/npm packages could be downloaded. Only `swing-core` was compiled and tested (8 tests pass, incl. the owner's
-example card: SL 371.90 / entry 392 / target 440 → R:R 2.39, 248 shares at Rs 5,00,000 × 1%).
+Phase 1 (list + chart MVP) **builds, passes all checks and runs end to end on real INDmoney data** (Windows 11,
+Rust 1.90, Node 24).
+- Rust: `cargo build`, `cargo test` (76 tests: 34 api-server, 34 market-data, 8 swing-core incl. the owner's card
+  SL 371.90 / entry 392 / target 440 → R:R 2.39, 248 shares), `cargo clippy --all-targets -- -D warnings`, `cargo fmt --check`.
+- Web: `npm run typecheck`, `lint`, `build`, `format` all clean.
+- Verified by hand: `/health` open; `/v1/*` 401 without/with a wrong token; list page (sparklines, en-IN numbers,
+  setup badges, filters, sorting); stock page (candles 1D/1W/15m, SMA 20/50/200, zones, SL/entry/target lines,
+  trade-plan card, key levels, sizing via `?capital=&risk=`); DEMO DATA pill on demo, absent on INDmoney; token
+  absent from HTML and static JS.
+- INDmoney: `login indmoney` works (dynamic client registration, PKCE, loopback :8765, refresh token). All 10
+  watchlist symbols resolve; ACE → Action Construction Equipment (INDS00830), not AceVector.
+- Git: work is on `main` at github.com/selvarajpownu/swing-trade. The repo was created with a `master` branch
+  ("Initial commit"); `main` sits on top of it. Switch the GitHub default branch to `main`, then delete `master`.
 
-**First job in Claude Code: make it build.**
-0. If a `setup-pending/` folder exists, follow its README (moves the Makefile and `.github/` files into place), then delete it.
-1. `cd services/api && cargo build && cargo test && cargo clippy -- -D warnings`. Least-certain spots (fix as needed):
-   tower-http 0.6 `TimeoutLayer::new` (deprecated), `DefaultMakeSpan/OnResponse .level()`, `CorsLayer::max_age`;
-   clap `global = true` + `env` on flattened args; axum 0.8 `Result<Path<_>, PathRejection>` extractors;
-   reqwest 0.12 `Response::chunk()`; chrono `and_utc()`; `try_join_all` inside `#[async_trait]` methods (Send).
-2. `cd apps/web && npm install && npm run typecheck && npm run lint && npm run build`. Least-certain:
-   `src/components/stock/candle-chart.tsx` (lightweight-charts v5 API: `seriesData.get`, `priceFormatter`,
-   histogram `priceScale().applyOptions`), `src/components/ui/button.tsx` (`ButtonLink` props from `Link`),
-   lucide-react icon names, Tailwind v4 `@keyframes` inside `@theme`.
-3. Run end-to-end with `DATA_PROVIDERS=demo`, then `login indmoney` and real data.
-4. Commit and push to `origin main`.
+Fixed in this session: two api-server tests (clap repeated flag, clippy excessive_precision), INDmoney rate-limit
+handling (see quirks), fallback candles no longer cached for 10 min, login no longer requests write scopes, and
+the trade-plan card's 2R wording.
+
+Open items:
+- `npm audit`: 1 high (postcss bundled inside `next`) whose only fix is Next 16 (breaking; stack says Next 15),
+  plus moderate minimatch issues in lint tooling. Revisit when Next 15.5.x ships a patched postcss.
+- `/stocks/<bad symbol>` renders "Symbol not found" but with HTTP 200 (Next streams `loading.tsx` first).
+- Falling back to demo for a real symbol mixes synthetic prices into the UI (only the pill warns). Consider
+  returning 503 "INDmoney busy, retry in Ns" instead of demo when INDmoney is configured.
 
 Known decisions/quirks:
 - INDmoney `lookup_ind_keys` is fuzzy ("ACE" returns AceVector first). The provider fetches details for all
   candidates and keeps the exact `entity_basic.symbol` match, with a company-name fallback in `market-data/src/names.rs`.
+- INDmoney MCP rate limit: **60 cost units/min, global** (OHLC = 2). Throttled calls return a JSON error object
+  inside a successful tool result; `IndmoneyProvider::call` waits ≤ 5 s and retries, else `Upstream` → fallback.
+  Bursts (e.g. scripted checks of 30 charts) will hit it; normal browsing doesn't.
+- INDmoney access tokens last ~1 h; the stored refresh token renews them automatically.
 - Web URLs use `risk` as a **percent** (`risk=1` = 1%); `server.ts` converts to the API's fraction (0.01).
 - `INDMONEY_TOKEN_FILE` is relative: `cargo run` from `services/api` writes `services/api/.data/`; Docker uses `./.data/`.
 - The demo provider's prices are synthetic; the UI shows a "DEMO DATA" pill when `provider == "demo"`.

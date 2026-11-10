@@ -30,7 +30,7 @@ Use `KEY=value`, one per line, and double-quote values that contain spaces (`NEX
 | `DEFAULT_CAPITAL` | `500000` | Capital in rupees for position sizing, when the request has no `capital`. |
 | `DEFAULT_RISK` | `0.01` | Fraction of capital risked per trade, when the request has no `risk`. |
 | `QUOTE_TTL_SECS` | `15` | Quote cache lifetime. |
-| `CANDLE_TTL_SECS` | `600` | Candle cache lifetime. |
+| `CANDLE_TTL_SECS` | `600` | Candle cache lifetime for the first provider in `DATA_PROVIDERS`. Candles from a fallback provider use `QUOTE_TTL_SECS`. |
 | `RUST_LOG` | `info` | `tracing` filter, e.g. `info,tower_http=debug`. |
 | `LOG_FORMAT` | `pretty` | `pretty` (human-readable) or `json` (one object per line, for servers). The Docker image defaults to `json`. |
 
