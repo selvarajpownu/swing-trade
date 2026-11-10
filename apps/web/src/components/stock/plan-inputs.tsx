@@ -5,7 +5,6 @@ import { useId, useState, useTransition, type FormEvent } from "react";
 import { Calculator } from "lucide-react";
 
 import {
-  DEFAULT_CAPITAL,
   DEFAULT_RISK_PCT,
   MAX_CAPITAL,
   MAX_RISK_PCT,
@@ -15,7 +14,8 @@ import {
   parseRiskPct,
   type PlanParams,
 } from "@/lib/api/params";
-import type { Interval } from "@/lib/api/types";
+import type { Interval, Market } from "@/lib/api/types";
+import { MARKETS } from "@/lib/markets";
 import { cn } from "@/lib/utils";
 
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 interface PlanInputsProps {
   plan: PlanParams;
   interval: Interval;
+  market?: Market;
 }
 
 /**
@@ -31,7 +32,9 @@ interface PlanInputsProps {
  * search params; the server re-fetches the plan from the backend.
  * Works as a plain GET form without JavaScript.
  */
-export function PlanInputs({ plan, interval }: PlanInputsProps) {
+export function PlanInputs({ plan, interval, market = "in" }: PlanInputsProps) {
+  const defaultCapital = MARKETS[market].defaultCapital;
+  const currencySign = MARKETS[market].currency === "USD" ? "$" : "₹";
   const router = useRouter();
   const pathname = usePathname();
   const [pending, startTransition] = useTransition();
@@ -40,17 +43,18 @@ export function PlanInputs({ plan, interval }: PlanInputsProps) {
   const capitalId = useId();
   const riskId = useId();
 
-  const dirty = parseCapital(capital) !== plan.capital || parseRiskPct(risk) !== plan.riskPct;
+  const dirty =
+    parseCapital(capital, defaultCapital) !== plan.capital || parseRiskPct(risk) !== plan.riskPct;
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const next = { capital: parseCapital(capital), riskPct: parseRiskPct(risk) };
+    const next = { capital: parseCapital(capital, defaultCapital), riskPct: parseRiskPct(risk) };
     setCapital(String(next.capital));
     setRisk(String(next.riskPct));
 
     const query = new URLSearchParams();
     if (interval !== "1d") query.set("interval", interval);
-    if (next.capital !== DEFAULT_CAPITAL) query.set("capital", String(next.capital));
+    if (next.capital !== defaultCapital) query.set("capital", String(next.capital));
     if (next.riskPct !== DEFAULT_RISK_PCT) query.set("risk", String(next.riskPct));
     const qs = query.toString();
     startTransition(() => {
@@ -77,7 +81,7 @@ export function PlanInputs({ plan, interval }: PlanInputsProps) {
           {interval !== "1d" ? <input type="hidden" name="interval" value={interval} /> : null}
           <div>
             <label htmlFor={capitalId} className="mb-1 block text-xs text-muted">
-              Capital (₹)
+              Capital ({currencySign})
             </label>
             <input
               id={capitalId}

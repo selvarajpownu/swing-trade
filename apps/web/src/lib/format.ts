@@ -40,14 +40,55 @@ export function formatINR(value: number | null | undefined): string {
   return `${sign}₹${fixed2.format(Math.abs(value))}`;
 }
 
+const usd2 = new Intl.NumberFormat("en-US", {
+  minimumFractionDigits: 2,
+  maximumFractionDigits: 2,
+});
+const usdWhole = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+
+/** Price in its currency: ₹12,34,567.80 (Indian grouping) or $1,234,567.80. */
+export function formatPrice(value: number | null | undefined, currency: string = "INR"): string {
+  if (currency !== "USD") return formatINR(value);
+  if (!isNum(value)) return EM_DASH;
+  const sign = value < 0 ? "-" : "";
+  return `${sign}$${usd2.format(Math.abs(value))}`;
+}
+
+/** Whole amounts for capital: ₹5,00,000 or $5,000. */
+export function formatMoneyWhole(
+  value: number | null | undefined,
+  currency: string = "INR",
+): string {
+  if (currency !== "USD") return formatINRWhole(value);
+  return isNum(value) ? `$${usdWhole.format(value)}` : EM_DASH;
+}
+
+/** "3h ago", "2d ago", or a date for anything older than a week. */
+export function formatTimeAgo(iso: string | null | undefined, now = Date.now()): string {
+  if (!iso) return "";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const mins = Math.max(0, Math.round((now - t) / 60_000));
+  if (mins < 60) return `${Math.max(1, mins)}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  if (days <= 7) return `${days}d ago`;
+  return new Intl.DateTimeFormat(LOCALE, { day: "numeric", month: "short", timeZone: IST }).format(
+    t,
+  );
+}
+
 /** Whole rupees, for capital: 500000 -> "₹5,00,000" */
 export function formatINRWhole(value: number | null | undefined): string {
   return isNum(value) ? `₹${integer.format(value)}` : EM_DASH;
 }
 
 /** 13461950 -> "1,34,61,950.00" (market volume, as in the reference design). */
-export function formatVolume(value: number | null | undefined): string {
-  return isNum(value) ? fixed2.format(value) : EM_DASH;
+export function formatVolume(value: number | null | undefined, currency: string = "INR"): string {
+  if (!isNum(value)) return EM_DASH;
+  // US volumes use US grouping (1,090,629), Indian ones lakh/crore grouping.
+  return currency === "USD" ? usd2.format(value) : fixed2.format(value);
 }
 
 export function formatInteger(value: number | null | undefined): string {

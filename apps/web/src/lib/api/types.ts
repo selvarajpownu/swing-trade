@@ -8,6 +8,9 @@
 /** Data provider name reported by the backend, e.g. "demo" or "indmoney". */
 export type ProviderName = string;
 
+/** `in` (NSE), `us` (US stocks, USD) or `mcx` (MCX commodity futures). */
+export type Market = "in" | "us" | "mcx";
+
 export type SetupPreset = "pullback" | "breakout" | "support_bounce" | "oversold";
 
 export type SetupState = "watching" | "low_risk_reward";
@@ -27,7 +30,8 @@ export interface SetupSummary {
   stop: number;
   target: number;
   risk_reward: number;
-  quantity: number;
+  /** Shares to trade; null where it cannot be sized (MCX futures trade in lots). */
+  quantity: number | null;
 }
 
 export interface ScoreBreakdown {
@@ -64,6 +68,9 @@ export interface StockListItem {
 
 export interface StocksResponse {
   provider: ProviderName;
+  market: Market;
+  /** Every price in the response is in this currency. */
+  currency: "INR" | "USD";
   as_of: string;
   items: StockListItem[];
 }
@@ -127,6 +134,8 @@ export interface Zone {
 
 export interface StockDetailResponse {
   provider: ProviderName;
+  market: Market;
+  currency: "INR" | "USD";
   quote: Quote;
   candles: Candle[];
   overlays: Overlays;
@@ -166,6 +175,38 @@ export interface ScanResponse {
   /** Matching rows before `limit`. */
   total: number;
   items: ScanItem[];
+}
+
+/** A headline: INDmoney (summary + sentiment) or Google News (publisher + link). */
+export interface NewsItem {
+  title: string;
+  summary: string | null;
+  sentiment: "positive" | "neutral" | "negative" | string | null;
+  /** ISO 8601 date or date-time. */
+  published_at: string | null;
+  source: string | null;
+  url: string | null;
+}
+
+/** GET /v1/stocks/{symbol}/news */
+export interface StockNewsResponse {
+  provider: ProviderName;
+  market: Market;
+  symbol: string;
+  items: NewsItem[];
+}
+
+export interface Headline extends NewsItem {
+  symbol: string;
+  name: string;
+}
+
+/** GET /v1/news */
+export interface HeadlinesResponse {
+  source: "google_news";
+  market: Market;
+  as_of: string;
+  items: Headline[];
 }
 
 export interface HealthResponse {

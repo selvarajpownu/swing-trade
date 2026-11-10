@@ -74,7 +74,7 @@ export function TopSetups({ data, plan }: TopSetupsProps) {
                 </span>
                 <span className="hidden text-right text-xs text-muted tabular-nums sm:block">
                   <span className="block">R:R {formatRiskReward(item.setup.risk_reward)}</span>
-                  <span className="block">{item.setup.quantity} shares</span>
+                  <span className="block">{item.setup.quantity ?? "—"} shares</span>
                 </span>
                 <ScoreBar score={item.setup.score} className="w-20" />
               </Link>

@@ -14,6 +14,8 @@ import { CornerDownLeft, Search } from "lucide-react";
 
 import { fetchStocks, stocksUrl } from "@/lib/api/client";
 import { parseSymbol } from "@/lib/api/params";
+import { stockHref } from "@/lib/links";
+import { marketForExchange } from "@/lib/markets";
 import { cn } from "@/lib/utils";
 
 import { SymbolAvatar } from "@/components/ui/symbol-avatar";
@@ -178,7 +180,8 @@ function PaletteDialog({ onClose }: { onClose: () => void }) {
   const go = (option: Option | undefined) => {
     if (!option) return;
     onClose();
-    router.push(`/stocks/${encodeURIComponent(option.symbol)}`);
+    // The hint is the exchange, which tells which market's page to open.
+    router.push(stockHref(option.symbol, undefined, undefined, marketForExchange(option.hint)));
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLInputElement>) => {

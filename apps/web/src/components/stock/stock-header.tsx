@@ -1,5 +1,5 @@
 import type { Quote, SetupDetail } from "@/lib/api/types";
-import { formatDateTimeIST, formatINR, formatVolume } from "@/lib/format";
+import { formatDateTimeIST, formatPrice, formatVolume } from "@/lib/format";
 
 import { SetupBadge } from "@/components/stocks/setup-badge";
 import { PriceChange } from "@/components/ui/price-change";
@@ -8,6 +8,7 @@ import { SymbolAvatar } from "@/components/ui/symbol-avatar";
 interface StockHeaderProps {
   quote: Quote;
   setup: SetupDetail | null;
+  currency?: string;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -19,7 +20,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function StockHeader({ quote, setup }: StockHeaderProps) {
+export function StockHeader({ quote, setup, currency = "INR" }: StockHeaderProps) {
   return (
     <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="flex min-w-0 items-start gap-3">
@@ -33,7 +34,9 @@ export function StockHeader({ quote, setup }: StockHeaderProps) {
             {quote.symbol} <span aria-hidden="true">·</span> {quote.exchange}
           </p>
           <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-            <span className="text-2xl font-semibold tabular-nums">{formatINR(quote.price)}</span>
+            <span className="text-2xl font-semibold tabular-nums">
+              {formatPrice(quote.price, currency)}
+            </span>
             <PriceChange
               change={quote.change}
               changePct={quote.change_pct}
@@ -47,13 +50,13 @@ export function StockHeader({ quote, setup }: StockHeaderProps) {
       </div>
 
       <dl className="grid grid-cols-2 gap-x-6 gap-y-2 rounded-2xl border border-line bg-surface px-4 py-3 sm:grid-cols-4">
-        <Metric label="52W High" value={formatINR(quote.high_52w)} />
-        <Metric label="52W Low" value={formatINR(quote.low_52w)} />
+        <Metric label="52W High" value={formatPrice(quote.high_52w, currency)} />
+        <Metric label="52W Low" value={formatPrice(quote.low_52w, currency)} />
         <Metric
           label="Day range"
-          value={`${formatINR(quote.day_low)} – ${formatINR(quote.day_high)}`}
+          value={`${formatPrice(quote.day_low, currency)} – ${formatPrice(quote.day_high, currency)}`}
         />
-        <Metric label="Volume" value={formatVolume(quote.volume)} />
+        <Metric label="Volume" value={formatVolume(quote.volume, currency)} />
       </dl>
     </div>
   );

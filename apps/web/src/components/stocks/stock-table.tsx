@@ -2,9 +2,10 @@ import Link from "next/link";
 import { ArrowDown, ArrowUp, ArrowUpDown } from "lucide-react";
 
 import type { PlanParams } from "@/lib/api/params";
-import type { StockListItem } from "@/lib/api/types";
-import { formatINR, formatNumber, formatVolume } from "@/lib/format";
+import type { Market, StockListItem } from "@/lib/api/types";
+import { formatNumber, formatPrice, formatVolume } from "@/lib/format";
 import { stockHref } from "@/lib/links";
+import { MARKETS } from "@/lib/markets";
 import type { ListView, SortKey } from "@/lib/stock-list-view";
 import { cn } from "@/lib/utils";
 
@@ -20,6 +21,8 @@ interface StockTableProps {
   view: ListView;
   onSort: (key: SortKey) => void;
   plan: PlanParams;
+  /** Market of every row (links and currency); India by default. */
+  market?: Market;
 }
 
 type AriaSort = "ascending" | "descending" | undefined;
@@ -63,8 +66,9 @@ const TH = "px-4 py-3 text-xs font-medium whitespace-nowrap text-muted";
 const TD = "px-4 py-3 align-middle";
 
 /** Desktop table (md and up). */
-export function StockTable({ rows, view, onSort, plan }: StockTableProps) {
+export function StockTable({ rows, view, onSort, plan, market = "in" }: StockTableProps) {
   const sortProps = { view, onSort };
+  const currency = MARKETS[market].currency;
 
   // `relative` contains the absolutely positioned sr-only labels, which would otherwise widen the page.
   return (
@@ -127,7 +131,7 @@ export function StockTable({ rows, view, onSort, plan }: StockTableProps) {
                     <SymbolAvatar symbol={item.symbol} name={item.name} />
                     <div className="min-w-0 flex-1">
                       <Link
-                        href={stockHref(item.symbol, plan)}
+                        href={stockHref(item.symbol, plan, undefined, market)}
                         title={item.name}
                         className="block truncate font-semibold text-fg after:absolute after:inset-0 after:content-[''] focus-visible:outline-none focus-visible:after:ring-2 focus-visible:after:ring-accent focus-visible:after:ring-inset"
                       >
@@ -139,15 +143,21 @@ export function StockTable({ rows, view, onSort, plan }: StockTableProps) {
                   </div>
                 </td>
                 <td className={cn(TD, "text-right")}>
-                  <div className="font-semibold tabular-nums">{formatINR(item.price)}</div>
+                  <div className="font-semibold tabular-nums">
+                    {formatPrice(item.price, currency)}
+                  </div>
                   <PriceChange
                     change={item.change}
                     changePct={item.change_pct}
                     className="text-xs"
                   />
                 </td>
-                <td className={cn(TD, "text-right tabular-nums")}>{formatINR(item.high_52w)}</td>
-                <td className={cn(TD, "text-right tabular-nums")}>{formatVolume(item.volume)}</td>
+                <td className={cn(TD, "text-right tabular-nums")}>
+                  {formatPrice(item.high_52w, currency)}
+                </td>
+                <td className={cn(TD, "text-right tabular-nums")}>
+                  {formatVolume(item.volume, currency)}
+                </td>
                 <td className={TD}>
                   <SetupBadge setup={setup} />
                 </td>

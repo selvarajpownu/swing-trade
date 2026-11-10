@@ -2,8 +2,11 @@ import "server-only";
 
 import { ApiError } from "./errors";
 import type {
+  HeadlinesResponse,
   Interval,
   HealthResponse,
+  Market,
+  StockNewsResponse,
   ScanResponse,
   SetupPreset,
   SetupState,
@@ -22,6 +25,12 @@ import type {
 const DEFAULT_API_URL = "http://localhost:8080";
 const DEFAULT_TIMEOUT_MS = 10_000;
 const HEALTH_TIMEOUT_MS = 4_000;
+const NEWS_TIMEOUT_MS = 20_000;
+
+/** `in` is the API default, so it stays out of URLs. */
+function marketParam(market: Market | undefined): string | undefined {
+  return market && market !== "in" ? market : undefined;
+}
 
 type QueryValue = string | number | undefined;
 
@@ -33,7 +42,8 @@ interface RequestOptions {
 }
 
 export interface GetStocksParams {
-  /** NSE symbols; omit for the server's default WATCHLIST. */
+  market?: Market;
+  /** Symbols; omit for the market's default watchlist. */
   symbols?: string[];
   capital?: number;
   /** Risk per trade in PERCENT (1 = 1%). Converted to a fraction for the API. */
@@ -41,6 +51,7 @@ export interface GetStocksParams {
 }
 
 export interface GetStockParams {
+  market?: Market;
   interval?: Interval;
   capital?: number;
   /** Risk per trade in PERCENT (1 = 1%). Converted to a fraction for the API. */
@@ -139,6 +150,7 @@ function assertShape(condition: boolean, what: string): void {
 export async function getStocks(params: GetStocksParams = {}): Promise<StocksResponse> {
   const data = await request<StocksResponse>("/v1/stocks", {
     query: {
+      market: marketParam(params.market),
       symbols: params.symbols?.length ? params.symbols.join(",") : undefined,
       capital: params.capital,
       risk: riskFraction(params.riskPct),
@@ -155,6 +167,7 @@ export async function getStock(
 ): Promise<StockDetailResponse> {
   const data = await request<StockDetailResponse>(`/v1/stocks/${encodeURIComponent(symbol)}`, {
     query: {
+      market: marketParam(params.market),
       interval: params.interval,
       capital: params.capital,
       risk: riskFraction(params.riskPct),
@@ -171,6 +184,32 @@ export async function getStock(
     },
     zones: Array.isArray(data.zones) ? data.zones : [],
   };
+}
+
+/** GET /v1/stocks/{symbol}/news (INDmoney headlines with sentiment). */
+export async function getStockNews(
+  symbol: string,
+  market: Market = "in",
+): Promise<StockNewsResponse> {
+  const data = await request<StockNewsResponse>(`/v1/stocks/${encodeURIComponent(symbol)}/news`, {
+    query: { market: marketParam(market) },
+  });
+  assertShape(Array.isArray(data.items), "`items`");
+  return data;
+}
+
+/** GET /v1/news (Google News headlines for a market's watchlist or one stock). */
+export async function getHeadlines(
+  market: Market = "in",
+  symbol?: string,
+): Promise<HeadlinesResponse> {
+  const data = await request<HeadlinesResponse>("/v1/news", {
+    query: { market: marketParam(market), symbol },
+    // One feed per watchlist stock, three at a time, on a cold cache.
+    timeoutMs: NEWS_TIMEOUT_MS,
+  });
+  assertShape(Array.isArray(data.items), "`items`");
+  return data;
 }
 
 /** GET /v1/scan */

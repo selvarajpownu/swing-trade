@@ -2,9 +2,10 @@ import Link from "next/link";
 import { ChevronRight } from "lucide-react";
 
 import type { PlanParams } from "@/lib/api/params";
-import type { StockListItem } from "@/lib/api/types";
-import { formatINR } from "@/lib/format";
+import type { Market, StockListItem } from "@/lib/api/types";
+import { formatPrice } from "@/lib/format";
 import { stockHref } from "@/lib/links";
+import { MARKETS } from "@/lib/markets";
 
 import { PriceChange } from "@/components/ui/price-change";
 import { SymbolAvatar } from "@/components/ui/symbol-avatar";
@@ -15,23 +16,27 @@ import { Sparkline } from "./sparkline";
 interface StockCardsProps {
   rows: StockListItem[];
   plan: PlanParams;
+  /** Market of every row (links and currency); India by default. */
+  market?: Market;
 }
 
 /** Compact list for small screens (below md). */
-export function StockCards({ rows, plan }: StockCardsProps) {
+export function StockCards({ rows, plan, market = "in" }: StockCardsProps) {
   return (
     <ul className="divide-y divide-line md:hidden" aria-label="Stocks">
       {rows.map((item) => (
         <li key={item.symbol}>
           <Link
-            href={stockHref(item.symbol, plan)}
+            href={stockHref(item.symbol, plan, undefined, market)}
             className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-surface-2 focus-visible:bg-surface-2"
           >
             <SymbolAvatar symbol={item.symbol} name={item.name} />
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">
                 <span className="truncate font-semibold text-fg">{item.name}</span>
-                <span className="shrink-0 font-semibold tabular-nums">{formatINR(item.price)}</span>
+                <span className="shrink-0 font-semibold tabular-nums">
+                  {formatPrice(item.price, MARKETS[market].currency)}
+                </span>
               </div>
               <div className="mt-0.5 flex items-center justify-between gap-2">
                 <span className="text-xs text-muted">{item.symbol}</span>

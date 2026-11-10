@@ -3,9 +3,10 @@
  * proxy to the Rust API and add the token on the server.
  */
 import { ApiError } from "./errors";
+import { MARKETS } from "../markets";
 import type { PlanParams } from "./params";
-import { DEFAULT_CAPITAL, DEFAULT_RISK_PCT } from "./params";
-import type { Interval, ScanResponse, StockDetailResponse, StocksResponse } from "./types";
+import { writePlanParams } from "./params";
+import type { Interval, Market, ScanResponse, StockDetailResponse, StocksResponse } from "./types";
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   let response: Response;
@@ -32,22 +33,23 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
   return body as T;
 }
 
-function planQuery(plan: PlanParams | undefined, query: URLSearchParams): void {
-  if (!plan) return;
-  if (plan.capital !== DEFAULT_CAPITAL) query.set("capital", String(plan.capital));
-  if (plan.riskPct !== DEFAULT_RISK_PCT) query.set("risk", String(plan.riskPct));
-}
-
-export function stocksUrl(plan?: PlanParams): string {
+export function stocksUrl(plan?: PlanParams, market: Market = "in"): string {
   const query = new URLSearchParams();
-  planQuery(plan, query);
+  if (market !== "in") query.set("market", market);
+  writePlanParams(plan, query, MARKETS[market].defaultCapital);
   const qs = query.toString();
   return qs ? `/api/stocks?${qs}` : "/api/stocks";
 }
 
-export function stockUrl(symbol: string, interval: Interval, plan?: PlanParams): string {
+export function stockUrl(
+  symbol: string,
+  interval: Interval,
+  plan?: PlanParams,
+  market: Market = "in",
+): string {
   const query = new URLSearchParams({ interval });
-  planQuery(plan, query);
+  if (market !== "in") query.set("market", market);
+  writePlanParams(plan, query, MARKETS[market].defaultCapital);
   return `/api/stocks/${encodeURIComponent(symbol)}?${query.toString()}`;
 }
 

@@ -3,6 +3,7 @@ import type { NextRequest } from "next/server";
 import { parsePlanParams, parseSymbolList } from "@/lib/api/params";
 import { apiErrorResponse, badRequest, jsonNoStore } from "@/lib/api/proxy";
 import { getStocks } from "@/lib/api/server";
+import { MARKETS, parseMarket } from "@/lib/markets";
 
 export const dynamic = "force-dynamic";
 
@@ -13,14 +14,20 @@ export const dynamic = "force-dynamic";
  */
 export async function GET(request: NextRequest) {
   const search = request.nextUrl.searchParams;
-  const plan = parsePlanParams((key) => search.get(key));
+  const market = parseMarket(search.get("market"));
+  const plan = parsePlanParams((key) => search.get(key), MARKETS[market].defaultCapital);
 
   const rawSymbols = search.get("symbols");
   const symbols = parseSymbolList(rawSymbols);
   if (rawSymbols && !symbols) return badRequest("No valid symbols in `symbols`.");
 
   try {
-    const data = await getStocks({ symbols, capital: plan.capital, riskPct: plan.riskPct });
+    const data = await getStocks({
+      market,
+      symbols,
+      capital: plan.capital,
+      riskPct: plan.riskPct,
+    });
     return jsonNoStore(data);
   } catch (err) {
     return apiErrorResponse(err, "api/stocks");

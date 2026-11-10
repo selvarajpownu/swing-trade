@@ -2,7 +2,7 @@ import { CircleAlert } from "lucide-react";
 
 import type { PlanParams } from "@/lib/api/params";
 import type { SetupDetail } from "@/lib/api/types";
-import { formatINR, formatINRWhole, formatInteger, formatRiskReward } from "@/lib/format";
+import { formatInteger, formatMoneyWhole, formatPrice, formatRiskReward } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
 import { SetupBadge } from "@/components/stocks/setup-badge";
@@ -13,6 +13,8 @@ interface TradePlanCardProps {
   symbol: string;
   setup: SetupDetail | null;
   plan: PlanParams;
+  /** `INR` or `USD`. */
+  currency?: string;
 }
 
 interface StepProps {
@@ -21,6 +23,7 @@ interface StepProps {
   price: number;
   tone: "down" | "neutral" | "up";
   last?: boolean;
+  currency: string;
 }
 
 const BADGE_TONE = {
@@ -29,7 +32,7 @@ const BADGE_TONE = {
   up: "border-up/30 bg-up/15 text-up",
 } as const;
 
-function Step({ badge, label, price, tone, last = false }: StepProps) {
+function Step({ badge, label, price, tone, last = false, currency }: StepProps) {
   return (
     <li className={cn("relative flex items-center gap-3", !last && "pb-5")}>
       {/* Connector to the next step */}
@@ -50,7 +53,7 @@ function Step({ badge, label, price, tone, last = false }: StepProps) {
       </span>
       <span className="flex-1 text-sm text-muted">{label}</span>
       <span className={cn("text-base font-semibold tabular-nums", tone === "up" && "text-up")}>
-        {formatINR(price)}
+        {formatPrice(price, currency)}
       </span>
     </li>
   );
@@ -66,7 +69,7 @@ function Stat({ label, value, hint }: { label: string; value: string; hint?: str
   );
 }
 
-export function TradePlanCard({ symbol, setup, plan }: TradePlanCardProps) {
+export function TradePlanCard({ symbol, setup, plan, currency = "INR" }: TradePlanCardProps) {
   if (!setup) {
     return (
       <Card aria-labelledby="plan-title">
@@ -80,9 +83,12 @@ export function TradePlanCard({ symbol, setup, plan }: TradePlanCardProps) {
     );
   }
 
+  const money = (v: number) => formatMoneyWhole(v, currency);
   const riskBudget = (plan.capital * plan.riskPct) / 100;
-  const positionValue = setup.quantity * setup.entry;
-  const maxLoss = setup.quantity * setup.risk_per_share;
+  // Null for MCX futures, which trade in lots of unknown size.
+  const qty = setup.quantity;
+  const positionValue = qty === null ? null : qty * setup.entry;
+  const maxLoss = qty === null ? null : qty * setup.risk_per_share;
   const lowRR = setup.state === "low_risk_reward";
 
   return (
@@ -102,26 +108,52 @@ export function TradePlanCard({ symbol, setup, plan }: TradePlanCardProps) {
         ) : null}
 
         <ol aria-label="Price levels" className={cn(lowRR && "opacity-80")}>
-          <Step badge="SL" label="Stop Loss" price={setup.stop} tone="down" />
-          <Step badge="B" label="Entry at" price={setup.entry} tone="neutral" />
-          <Step badge="TP" label="Target Price" price={setup.target} tone="up" last />
+          <Step badge="SL" label="Stop Loss" price={setup.stop} tone="down" currency={currency} />
+          <Step badge="B" label="Entry at" price={setup.entry} tone="neutral" currency={currency} />
+          <Step
+            badge="TP"
+            label="Target Price"
+            price={setup.target}
+            tone="up"
+            last
+            currency={currency}
+          />
         </ol>
 
         <dl className="mt-5 grid grid-cols-2 gap-2">
           <Stat label="Risk-reward" value={formatRiskReward(setup.risk_reward)} />
+          {qty === null || positionValue === null ? (
+            <Stat label="Quantity" value="In lots" hint="Lot size not available" />
+          ) : (
+            <Stat
+              label="Quantity"
+              value={`${formatInteger(qty)} shares`}
+              hint={`≈ ${money(positionValue)} position`}
+            />
+          )}
           <Stat
-            label="Quantity"
-            value={`${formatInteger(setup.quantity)} shares`}
-            hint={`≈ ${formatINRWhole(positionValue)} position`}
+            label={qty === null ? "Risk / unit" : "Risk / share"}
+            value={formatPrice(setup.risk_per_share, currency)}
           />
-          <Stat label="Risk / share" value={formatINR(setup.risk_per_share)} />
-          <Stat label="Reward / share" value={formatINR(setup.reward_per_share)} />
+          <Stat
+            label={qty === null ? "Reward / unit" : "Reward / share"}
+            value={formatPrice(setup.reward_per_share, currency)}
+          />
         </dl>
 
         <p className="mt-3 text-xs leading-5 text-muted">
-          Sized for {formatINRWhole(plan.capital)} capital at {plan.riskPct}% risk (
-          {formatINRWhole(riskBudget)} per trade). Loss at stop ≈{" "}
-          <span className="text-down tabular-nums">{formatINRWhole(maxLoss)}</span>.{" "}
+          {maxLoss === null ? (
+            <>
+              Risk budget {money(riskBudget)} per trade ({plan.riskPct}% of {money(plan.capital)});
+              divide it by risk per unit × lot size for lots.{" "}
+            </>
+          ) : (
+            <>
+              Sized for {money(plan.capital)} capital at {plan.riskPct}% risk ({money(riskBudget)}{" "}
+              per trade). Loss at stop ≈{" "}
+              <span className="text-down tabular-nums">{money(maxLoss)}</span>.{" "}
+            </>
+          )}
           {setup.target_from_zone
             ? "Target is the next resistance zone."
             : "Target is entry + 2R (no resistance zone at least 1R above entry)."}

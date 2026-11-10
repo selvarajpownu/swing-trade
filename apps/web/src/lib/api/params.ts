@@ -63,8 +63,9 @@ function parseNumberInRange(
   return Math.min(max, Math.max(min, value));
 }
 
-export function parseCapital(raw: string | undefined | null): number {
-  return Math.round(parseNumberInRange(raw, DEFAULT_CAPITAL, MIN_CAPITAL, MAX_CAPITAL));
+/** Capital from a URL; `fallback` is the market's default (₹5,00,000 or $5,000). */
+export function parseCapital(raw: string | undefined | null, fallback = DEFAULT_CAPITAL): number {
+  return Math.round(parseNumberInRange(raw, fallback, MIN_CAPITAL, MAX_CAPITAL));
 }
 
 export function parseRiskPct(raw: string | undefined | null): number {
@@ -88,14 +89,31 @@ export interface PlanParams {
   riskPct: number;
 }
 
-export function parsePlanParams(get: (key: string) => string | undefined | null): PlanParams {
+export function parsePlanParams(
+  get: (key: string) => string | undefined | null,
+  defaultCapital = DEFAULT_CAPITAL,
+): PlanParams {
   return {
-    capital: parseCapital(get("capital")),
+    capital: parseCapital(get("capital"), defaultCapital),
     riskPct: parseRiskPct(get("risk")),
   };
 }
 
 /** True when the plan params differ from the defaults (so they belong in a URL). */
-export function isCustomPlan({ capital, riskPct }: PlanParams): boolean {
-  return capital !== DEFAULT_CAPITAL || riskPct !== DEFAULT_RISK_PCT;
+export function isCustomPlan(
+  { capital, riskPct }: PlanParams,
+  defaultCapital = DEFAULT_CAPITAL,
+): boolean {
+  return capital !== defaultCapital || riskPct !== DEFAULT_RISK_PCT;
+}
+
+/** Writes non-default plan params into `query`. */
+export function writePlanParams(
+  plan: PlanParams | undefined,
+  query: URLSearchParams,
+  defaultCapital = DEFAULT_CAPITAL,
+): void {
+  if (!plan) return;
+  if (plan.capital !== defaultCapital) query.set("capital", String(plan.capital));
+  if (plan.riskPct !== DEFAULT_RISK_PCT) query.set("risk", String(plan.riskPct));
 }

@@ -35,7 +35,8 @@ interface StockListProps {
 }
 
 export function StockList({ initialData, initialView, plan }: StockListProps) {
-  const url = stocksUrl(plan);
+  const market = initialData.market ?? "in";
+  const url = stocksUrl(plan, market);
   const fetcher = useCallback((signal: AbortSignal) => fetchStocks(url, signal), [url]);
   const { data, error, isRefreshing, refresh } = usePolling(fetcher, { initialData });
 
@@ -195,8 +196,8 @@ export function StockList({ initialData, initialView, plan }: StockListProps) {
           />
         ) : (
           <>
-            <StockTable rows={rows} view={view} onSort={onSort} plan={plan} />
-            <StockCards rows={rows} plan={plan} />
+            <StockTable rows={rows} view={view} onSort={onSort} plan={plan} market={market} />
+            <StockCards rows={rows} plan={plan} market={market} />
           </>
         )}
       </Card>

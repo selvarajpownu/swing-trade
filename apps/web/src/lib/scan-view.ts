@@ -3,7 +3,7 @@
  * Pure: used on the server (page, route handler) and in the browser.
  */
 import type { PlanParams } from "./api/params";
-import { DEFAULT_CAPITAL, DEFAULT_RISK_PCT } from "./api/params";
+import { writePlanParams } from "./api/params";
 import type { SetupPreset, SetupState } from "./api/types";
 
 export const SCAN_PRESETS: readonly { id: SetupPreset | "any"; label: string }[] = [
@@ -94,8 +94,7 @@ export function scanApiParams(filters: ScanFilters): {
 export function scanUrl(filters: ScanFilters, plan?: PlanParams, limit?: number): string {
   const query = new URLSearchParams();
   writeScanFilters(filters, query);
-  if (plan && plan.capital !== DEFAULT_CAPITAL) query.set("capital", String(plan.capital));
-  if (plan && plan.riskPct !== DEFAULT_RISK_PCT) query.set("risk", String(plan.riskPct));
+  writePlanParams(plan, query);
   if (limit) query.set("limit", String(limit));
   const qs = query.toString();
   return qs ? `/api/scan?${qs}` : "/api/scan";

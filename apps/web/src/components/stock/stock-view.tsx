@@ -5,9 +5,10 @@ import { useCallback } from "react";
 import { ChevronLeft } from "lucide-react";
 
 import { fetchStock, stockUrl } from "@/lib/api/client";
+import { MARKETS } from "@/lib/markets";
 import { describeApiError } from "@/lib/api/errors";
 import type { PlanParams } from "@/lib/api/params";
-import type { Interval, StockDetailResponse } from "@/lib/api/types";
+import type { Interval, StockDetailResponse, StockNewsResponse } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { usePolling } from "@/hooks/use-polling";
 
@@ -29,6 +30,9 @@ interface StockViewProps {
   symbol: string;
   interval: Interval;
   plan: PlanParams;
+  /** INDmoney headlines, loaded once on the server. */
+  news?: StockNewsResponse | null;
+  newsError?: string | null;
 }
 
 const INTERVAL_LABEL: Record<Interval, string> = {
@@ -38,8 +42,18 @@ const INTERVAL_LABEL: Record<Interval, string> = {
 };
 
 /** Stock page body. Polls /api/stocks/[symbol] every 15s while visible. */
-export function StockView({ initialData, symbol, interval, plan }: StockViewProps) {
-  const url = stockUrl(symbol, interval, plan);
+export function StockView({
+  initialData,
+  symbol,
+  interval,
+  plan,
+  news,
+  newsError,
+}: StockViewProps) {
+  const market = initialData.market ?? "in";
+  const currency = initialData.currency ?? "INR";
+  const info = MARKETS[market];
+  const url = stockUrl(symbol, interval, plan, market);
   const fetcher = useCallback((signal: AbortSignal) => fetchStock(url, signal), [url]);
   const { data, error, isRefreshing } = usePolling(fetcher, { initialData });
 
@@ -50,14 +64,14 @@ export function StockView({ initialData, symbol, interval, plan }: StockViewProp
   return (
     <div className="space-y-5">
       <Link
-        href="/stocks"
+        href={info.path}
         className="inline-flex items-center gap-1 text-xs text-muted transition-colors hover:text-fg"
       >
         <ChevronLeft aria-hidden="true" className="size-3.5" />
-        Stock list
+        {info.label}
       </Link>
 
-      <StockHeader quote={quote} setup={setup} />
+      <StockHeader quote={quote} setup={setup} currency={currency} />
 
       {error ? (
         <p
@@ -92,7 +106,7 @@ export function StockView({ initialData, symbol, interval, plan }: StockViewProp
                   </span>
                 </p>
               </div>
-              <IntervalToggle symbol={symbol} interval={interval} plan={plan} />
+              <IntervalToggle symbol={symbol} interval={interval} plan={plan} market={market} />
             </div>
             {candles.length > 0 ? (
               <CandleChart
@@ -115,14 +129,14 @@ export function StockView({ initialData, symbol, interval, plan }: StockViewProp
           aria-label="Trade plan and levels"
           className="space-y-5 self-start xl:col-start-2 xl:row-span-2 xl:row-start-1"
         >
-          <TradePlanCard symbol={symbol} setup={setup} plan={plan} />
-          <PlanInputs plan={plan} interval={interval} />
+          <TradePlanCard symbol={symbol} setup={setup} plan={plan} currency={currency} />
+          <PlanInputs plan={plan} interval={interval} market={market} />
           <KeyLevels zones={zones} price={quote.price} />
           <SnapshotCard snapshot={snapshot} volume={quote.volume} />
         </aside>
 
         <div className="min-w-0 self-start xl:col-start-1 xl:row-start-2">
-          <StockTabs symbol={symbol} />
+          <StockTabs symbol={symbol} news={news} newsError={newsError} />
         </div>
       </div>
     </div>
