@@ -66,8 +66,9 @@ const TD = "px-4 py-3 align-middle";
 export function StockTable({ rows, view, onSort, plan }: StockTableProps) {
   const sortProps = { view, onSort };
 
+  // `relative` contains the absolutely positioned sr-only labels, which would otherwise widen the page.
   return (
-    <div className="hidden overflow-x-auto md:block">
+    <div className="relative hidden overflow-x-auto md:block">
       <table className="w-full min-w-[1080px] border-collapse text-sm">
         <caption className="sr-only">
           Stocks in the watchlist with their swing setups. Columns with buttons can be sorted.
