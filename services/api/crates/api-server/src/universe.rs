@@ -1,6 +1,8 @@
 //! The list of symbols the background scanner walks.
 //!
-//! Source, first match wins: `UNIVERSE_FILE`, `UNIVERSE`, `WATCHLIST`.
+//! Source, first match wins: `UNIVERSE_FILE`, `UNIVERSE`, `WATCHLIST`. The
+//! `WATCHLIST` is always added on top, so your own stocks are scanned even
+//! when they are not in the index file.
 //! The file is either one symbol per line or a CSV with a `Symbol` column;
 //! NSE's index constituent files (`Company Name,Industry,Symbol,Series,ISIN
 //! Code`) work as downloaded, and their names and industries are kept.
@@ -64,9 +66,20 @@ pub fn load(config: &Config) -> anyhow::Result<Universe> {
         };
         symbols.into_iter().map(UniverseEntry::bare).collect()
     };
+    let entries = with_watchlist(entries, config.watchlist());
     let extra = params::parse_symbols_lenient(&config.scan_exclude)
         .map_err(|e| anyhow::anyhow!("SCAN_EXCLUDE: {e}"))?;
     Ok(apply_exclusions(entries, &extra))
+}
+
+/// Appends watchlist symbols missing from `entries`, keeping file order first.
+fn with_watchlist(mut entries: Vec<UniverseEntry>, watchlist: Vec<String>) -> Vec<UniverseEntry> {
+    for symbol in watchlist {
+        if !entries.iter().any(|e| e.symbol == symbol) {
+            entries.push(UniverseEntry::bare(symbol));
+        }
+    }
+    entries
 }
 
 fn apply_exclusions(entries: Vec<UniverseEntry>, extra: &[String]) -> Universe {
@@ -222,11 +235,19 @@ mod tests {
         assert_eq!(u.entries, vec![UniverseEntry::bare("IEX".to_owned())]);
         assert_eq!(u.excluded, vec!["INDRAMEDCO"]);
 
+        // UNIVERSE plus the watchlist (IEX), minus SCAN_EXCLUDE.
         let mut args = base.to_vec();
-        args.extend(["--universe", "bse,cams", "--scan-exclude", "cams"]);
+        args.extend([
+            "--universe",
+            "bse,cams",
+            "--scan-exclude",
+            "cams",
+            "--watchlist",
+            "IEX,BSE",
+        ]);
         let u = load(&config_from(&args)).unwrap();
         let symbols: Vec<&str> = u.entries.iter().map(|e| e.symbol.as_str()).collect();
-        assert_eq!(symbols, vec!["BSE"]);
+        assert_eq!(symbols, vec!["BSE", "IEX"]);
         assert_eq!(u.excluded, vec!["CAMS", "INDRAMEDCO"]);
 
         let mut args = base.to_vec();

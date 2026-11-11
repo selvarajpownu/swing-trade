@@ -203,7 +203,12 @@ async fn scan_entries(
     let mut failed = Vec::new();
     for (i, entry) in entries.iter().enumerate() {
         match fetcher.daily(&entry.symbol).await {
-            Ok(candles) => rows.extend(build_row(entry, &candles, params)),
+            Ok(candles) => {
+                if let Some(row) = build_row(entry, &candles, params) {
+                    rows.push(row);
+                    publish_partial(scanner, &rows).await;
+                }
+            }
             Err(e) => {
                 tracing::warn!(symbol = %entry.symbol, error = %e, "scan: no candles");
                 failed.push(entry.symbol.clone());
@@ -218,6 +223,18 @@ async fn scan_entries(
             .await;
     }
     (rows, failed)
+}
+
+/// During the very first scan there are no earlier results to show (a full
+/// Nifty 500 run takes hours), so hits are published as they are found.
+/// Later scans keep showing the previous complete results until they finish.
+async fn publish_partial(scanner: &Scanner, rows: &[ScanRow]) {
+    let mut inner = scanner.inner.write().await;
+    if inner.status.finished_at.is_none() {
+        let mut sorted = rows.to_vec();
+        sorted.sort_by(|a, b| best_score(b).total_cmp(&best_score(a)));
+        inner.rows = Arc::new(sorted);
+    }
 }
 
 /// Times a scan retries one stock after the provider reports a rate limit.
