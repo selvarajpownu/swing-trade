@@ -36,8 +36,8 @@ Use `KEY=value`, one per line, and double-quote values that contain spaces (`NEX
 | `US_WATCHLIST` | `AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA` | Default symbols for the US Stock page (`market=us`). |
 | `COMMODITY_WATCHLIST` | `GOLD,SILVER,CRUDEOIL,NATURALGAS,COPPER` | Default MCX commodities for the Commodity page (`market=mcx`, near-month futures). |
 | `US_DEFAULT_CAPITAL` | `5000` | Capital in **US dollars** for US position sizing. |
-| `UNIVERSE_FILE` | *(empty)* | Symbols for the background scanner: one per line, or a CSV with a `Symbol` column. NSE's index constituent CSVs (e.g. Nifty 500) work as downloaded and add company names and industries. |
-| `UNIVERSE` | *(empty)* | Comma-separated scan symbols, used when `UNIVERSE_FILE` is not set. Empty means `WATCHLIST`. |
+| `UNIVERSE_FILE` | *(empty)* | Symbols for the background scanner: one per line, or a CSV with a `Symbol` column. NSE's index constituent CSVs work as downloaded and add company names and industries, e.g. the Nifty 500 list from `https://nsearchives.nseindia.com/content/indices/ind_nifty500list.csv` saved as `services/api/.data/universe/nifty500.csv` (`UNIVERSE_FILE=.data/universe/nifty500.csv` when the API runs from `services/api`). |
+| `UNIVERSE` | *(empty)* | Comma-separated scan symbols, used when `UNIVERSE_FILE` is not set. Empty means `WATCHLIST`. The `WATCHLIST` is always scanned too, even when it is not in the file. |
 | `SCAN_EXCLUDE` | *(empty)* | Extra symbols never scanned. `INDRAMEDCO` (already held) is always excluded. |
 | `SCAN_INTERVAL_MINS` | `30` | Minutes between scans. `0` scans once at startup. Fresh stored candles make repeat scans cheap. |
 | `SCAN_SYMBOLS_PER_HOUR` | `150` | Network candle fetches per hour during a scan (2 INDmoney units each = 300 of the 450/hour budget), leaving the rest for pages. A 500-stock universe refreshes in about 3.3 hours once per trading day; repeat scans read the store. |

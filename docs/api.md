@@ -183,7 +183,8 @@ Query (all optional):
 ```
 
 - `status.state`: `pending` (no scan finished yet), `running` or `idle`. While a scan runs, `items` holds the previous
-  completed scan's results (empty before the first one) and `scanned` counts progress.
+  completed scan's results and `scanned` counts progress. During the very first scan (no earlier results) hits are
+  published as they are found.
 - `provider`: the provider the scan read from: the first entry in `DATA_PROVIDERS`. A scan never falls back to demo.
 - Items are the rows with at least one setup that passes every filter, best score first; `total` counts them before `limit`.
 - Prices come from the latest **daily candle** (`bar_time`, Unix seconds), not a live quote. `change` is against the previous

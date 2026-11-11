@@ -26,7 +26,8 @@ Done:
 - News: INDmoney headlines with sentiment on each stock page; Google News RSS headlines with links on Stock news.
 
 Next:
-- Universe file for the scanner (e.g. NSE's Nifty 500 CSV); at INDmoney's 500 units/hour a full refresh takes ~3.3 h.
+- Done 11 Nov: scanner universe = NSE Nifty 500 list (`UNIVERSE_FILE`) plus the watchlist (503 stocks); a full
+  refresh takes ~3.3 h at INDmoney's hourly limit, once per trading day, with hits shown as they are found.
 - Google Finance-style range tabs (1D / 5D / 1M / 6M / YTD / 1Y) on the chart.
 - Scanner for US and MCX (today it scans NSE only).
 
