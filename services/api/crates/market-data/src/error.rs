@@ -15,6 +15,14 @@ pub enum Error {
         retry_after: std::time::Duration,
     },
 
+    /// The provider does not cover this market, symbol or candle size.
+    /// Expected, not a fault: the next provider simply takes over.
+    #[error("{provider} does not cover this: {message}")]
+    Unsupported {
+        provider: &'static str,
+        message: String,
+    },
+
     #[error("upstream {provider} error: {message}")]
     Upstream {
         provider: &'static str,

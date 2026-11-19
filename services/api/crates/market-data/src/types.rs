@@ -97,9 +97,11 @@ impl Market {
         (Market::In, key)
     }
 
-    /// Whether providers serve this candle size here (US data is daily only).
-    pub fn supports(&self, interval: Interval) -> bool {
-        !(matches!(self, Market::Us) && interval == Interval::Min15)
+    /// Whether this candle size is offered here. Every market offers all
+    /// three; a provider without one (INDmoney has no US intraday data)
+    /// fails over to the next.
+    pub fn supports(&self, _interval: Interval) -> bool {
+        true
     }
 }
 
@@ -234,7 +236,7 @@ mod tests {
         assert_eq!("MCX".parse::<Market>(), Ok(Market::Mcx));
         assert_eq!("".parse::<Market>(), Ok(Market::In));
         assert!("lse".parse::<Market>().is_err());
-        assert!(!Market::Us.supports(Interval::Min15));
+        assert!(Market::Us.supports(Interval::Min15));
         assert!(Market::Mcx.supports(Interval::Min15));
         assert_eq!(Market::Us.currency(), "USD");
     }

@@ -23,13 +23,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::{Duration as Days, NaiveDate, Utc};
+use async_trait::async_trait;
+use chrono::{DateTime, Duration as Days, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use swing_core::Candle;
 use tokio::sync::RwLock;
 
-use crate::{Error, Result};
+use crate::{Error, Interval, Market, MarketData, Quote, Result};
 
 /// Id reported for data read from NSE's files.
 pub const ID: &str = "nse";
@@ -157,6 +158,8 @@ pub struct NseEod {
     target_days: usize,
     data: RwLock<Arc<EodData>>,
     status: RwLock<SyncStatus>,
+    /// Symbol → company name, for end-of-day quotes.
+    names: RwLock<HashMap<String, String>>,
 }
 
 impl NseEod {
@@ -172,7 +175,13 @@ impl NseEod {
             target_days: target_days.max(30),
             data: RwLock::new(Arc::new(EodData::default())),
             status: RwLock::new(SyncStatus::default()),
+            names: RwLock::new(HashMap::new()),
         })
+    }
+
+    /// Company names to show on end-of-day quotes (the files carry none).
+    pub async fn set_names(&self, names: HashMap<String, String>) {
+        *self.names.write().await = names;
     }
 
     /// The data of the last completed sync.
@@ -368,6 +377,127 @@ impl NseEod {
         }
         Ok(rows)
     }
+}
+
+/// Bars in roughly one trading year.
+const BARS_52W: usize = 250;
+
+/// Daily and weekly candles, and end-of-day quotes, for NSE stocks from the
+/// cached files. Meant as a fallback behind live sources: its "quote" is the
+/// last session's close, and it has no intraday bars.
+pub struct NseEodProvider {
+    eod: Arc<NseEod>,
+}
+
+impl NseEodProvider {
+    pub fn new(eod: Arc<NseEod>) -> Self {
+        Self { eod }
+    }
+
+    /// The series of an NSE key. Errors are never `NotFound`: the files only
+    /// hold the scan universe, so a miss says nothing about other sources.
+    async fn series(&self, key: &str) -> Result<(Arc<EodData>, String)> {
+        let unavailable = |message: String| Error::Unsupported {
+            provider: ID,
+            message,
+        };
+        let (market, bare) = Market::split(key);
+        if market != Market::In {
+            return Err(unavailable(format!(
+                "{market} symbols are not in NSE's files"
+            )));
+        }
+        let data = self.eod.data().await;
+        if data.days == 0 {
+            return Err(unavailable(
+                "NSE end-of-day files are not loaded yet".to_owned(),
+            ));
+        }
+        if !data.series.contains_key(bare) {
+            return Err(unavailable(format!(
+                "{bare} is not in the scan universe kept from NSE's files"
+            )));
+        }
+        Ok((data, bare.to_owned()))
+    }
+}
+
+#[async_trait]
+impl MarketData for NseEodProvider {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    async fn quotes(&self, symbols: &[String]) -> Result<Vec<Quote>> {
+        let names = self.names_snapshot().await;
+        let mut quotes = Vec::with_capacity(symbols.len());
+        for symbol in symbols {
+            let key = symbol.trim().to_ascii_uppercase();
+            let (data, bare) = self.series(&key).await?;
+            if let Some(q) = data
+                .series
+                .get(&bare)
+                .and_then(|s| eod_quote(&key, names.get(&bare), &s.candles))
+            {
+                quotes.push(q);
+            }
+        }
+        Ok(quotes)
+    }
+
+    async fn candles(&self, symbol: &str, interval: Interval) -> Result<Vec<Candle>> {
+        let key = symbol.trim().to_ascii_uppercase();
+        if interval == Interval::Min15 {
+            return Err(Error::Unsupported {
+                provider: ID,
+                message: "NSE's end-of-day files have no intraday bars".to_owned(),
+            });
+        }
+        let (data, bare) = self.series(&key).await?;
+        let daily = data
+            .series
+            .get(&bare)
+            .map(|s| s.candles.clone())
+            .unwrap_or_default();
+        Ok(match interval {
+            Interval::Week => crate::demo::weekly(&daily),
+            _ => daily,
+        })
+    }
+}
+
+impl NseEodProvider {
+    async fn names_snapshot(&self) -> HashMap<String, String> {
+        self.eod.names.read().await.clone()
+    }
+}
+
+/// A quote as of the last session's close.
+fn eod_quote(key: &str, name: Option<&String>, candles: &[Candle]) -> Option<Quote> {
+    let last = candles.last()?;
+    let prev_close = candles.len().checked_sub(2).map(|i| candles[i].close);
+    let change = prev_close.map_or(0.0, |p| last.close - p);
+    let year = &candles[candles.len().saturating_sub(BARS_52W)..];
+    let date = DateTime::from_timestamp(last.ts, 0)?.format("%Y-%m-%d");
+    Some(Quote {
+        symbol: key.to_owned(),
+        name: name
+            .cloned()
+            .unwrap_or_else(|| Market::split(key).1.to_owned()),
+        exchange: "NSE".to_owned(),
+        price: last.close,
+        change,
+        change_pct: prev_close
+            .filter(|p| *p > 0.0)
+            .map_or(0.0, |p| change / p * 100.0),
+        day_high: last.high,
+        day_low: last.low,
+        high_52w: year.iter().map(|c| c.high).fold(f64::MIN, f64::max),
+        low_52w: year.iter().map(|c| c.low).fold(f64::MAX, f64::min),
+        volume: last.volume,
+        // NSE's closing session ends at 15:30 IST.
+        updated_at: Some(format!("{date}T15:30:00+05:30")),
+    })
 }
 
 async fn exists(path: &Path) -> bool {
@@ -768,6 +898,47 @@ GS2030, GS, 18-Nov-2026, 100, 100, 100, 100, 100, 100, 100, 10, 0.01, 1, 10, 100
 
         let wanted: HashSet<String> = ["ACE".to_owned()].into();
         assert_eq!(parse_bhavcopy(BHAV, Some(&wanted)).len(), 1);
+    }
+
+    #[test]
+    fn builds_end_of_day_quotes() {
+        let candles = vec![
+            Candle::new(1_794_960_000, 100.0, 104.0, 99.0, 102.0, 1_000.0),
+            Candle::new(1_795_046_400, 102.0, 110.0, 101.0, 108.0, 2_000.0),
+        ];
+        let name = "Action Construction Equipment Ltd.".to_owned();
+        let q = eod_quote("ACE", Some(&name), &candles).unwrap();
+        assert_eq!((q.price, q.change), (108.0, 6.0));
+        assert!((q.change_pct - 6.0 / 102.0 * 100.0).abs() < 1e-9);
+        assert_eq!(
+            (q.day_high, q.day_low, q.high_52w, q.low_52w),
+            (110.0, 101.0, 110.0, 99.0)
+        );
+        assert_eq!(q.name, name);
+        assert_eq!(q.updated_at.as_deref(), Some("2026-11-19T15:30:00+05:30"));
+        assert_eq!(eod_quote("ACE", None, &candles).unwrap().name, "ACE");
+        assert!(eod_quote("ACE", None, &[]).is_none());
+    }
+
+    #[tokio::test]
+    async fn eod_provider_never_claims_a_symbol_is_missing() {
+        let dir = std::env::temp_dir().join(format!("swing-nse-prov-{}", std::process::id()));
+        let provider = NseEodProvider::new(Arc::new(NseEod::new(&dir, 300).unwrap()));
+        // Nothing loaded yet, another market, intraday: all fail over, none is NotFound.
+        for result in [
+            provider.candles("ACE", Interval::Day).await,
+            provider.candles("US:AAPL", Interval::Day).await,
+            provider.candles("ACE", Interval::Min15).await,
+        ] {
+            assert!(
+                matches!(result, Err(Error::Unsupported { .. })),
+                "{result:?}"
+            );
+        }
+        assert!(matches!(
+            provider.quotes(&["MCX:GOLD".to_owned()]).await,
+            Err(Error::Unsupported { .. })
+        ));
     }
 
     #[test]

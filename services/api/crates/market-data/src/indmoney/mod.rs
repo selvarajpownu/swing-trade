@@ -425,7 +425,7 @@ impl IndmoneyProvider {
     /// Daily (or weekly, aggregated) US candles; there is no intraday data.
     async fn us_candles(&self, symbol: &str, interval: Interval) -> Result<Vec<Candle>> {
         if interval == Interval::Min15 {
-            return Err(Error::Upstream {
+            return Err(Error::Unsupported {
                 provider: ID,
                 message: "15-minute candles are not available for US stocks".to_owned(),
             });

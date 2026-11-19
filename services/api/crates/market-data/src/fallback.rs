@@ -23,6 +23,12 @@ impl FallbackProvider {
         Self { providers }
     }
 
+    /// Adds a provider at `index` in the order (clamped to the end).
+    pub fn insert(&mut self, index: usize, provider: Arc<dyn MarketData>) {
+        let index = index.min(self.providers.len());
+        self.providers.insert(index, provider);
+    }
+
     /// Ids of the wrapped providers, in order.
     pub fn ids(&self) -> Vec<&'static str> {
         self.providers.iter().map(|p| p.id()).collect()
@@ -49,6 +55,7 @@ impl FallbackProvider {
             match p.quotes(symbols).await {
                 Ok(quotes) => return Ok((quotes, p.id())),
                 Err(e @ Error::NotFound(_)) => return Err(e),
+                Err(e @ Error::Unsupported { .. }) => failures.push((p.id(), e)),
                 Err(e) => {
                     tracing::warn!(provider = p.id(), error = %e, "quotes failed; trying next provider");
                     failures.push((p.id(), e));
@@ -69,6 +76,7 @@ impl FallbackProvider {
             match p.candles(symbol, interval).await {
                 Ok(candles) => return Ok((candles, p.id())),
                 Err(e @ Error::NotFound(_)) => return Err(e),
+                Err(e @ Error::Unsupported { .. }) => failures.push((p.id(), e)),
                 Err(e) => {
                     tracing::warn!(provider = p.id(), symbol, error = %e, "candles failed; trying next provider");
                     failures.push((p.id(), e));
@@ -78,12 +86,17 @@ impl FallbackProvider {
         Err(combine(failures))
     }
 
-    /// Headlines plus the id of the provider that served them. Demo has no
-    /// news, so after an INDmoney failure the list is simply empty.
+    /// Headlines plus the id of the provider that served them. Most
+    /// providers have no news and answer with an empty list, so the first
+    /// non-empty answer wins; when nobody has any, the result is empty.
     pub async fn news_with_source(&self, symbol: &str) -> Result<(Vec<NewsItem>, &'static str)> {
         let mut failures = Vec::new();
+        let mut empty = None;
         for p in &self.providers {
             match p.news(symbol).await {
+                Ok(items) if items.is_empty() => {
+                    empty.get_or_insert(p.id());
+                }
                 Ok(items) => return Ok((items, p.id())),
                 Err(e @ Error::NotFound(_)) => return Err(e),
                 Err(e) => {
@@ -92,7 +105,10 @@ impl FallbackProvider {
                 }
             }
         }
-        Err(combine(failures))
+        match empty {
+            Some(id) => Ok((Vec::new(), id)),
+            None => Err(combine(failures)),
+        }
     }
 }
 
@@ -161,6 +177,48 @@ mod tests {
 
     fn not_found() -> Error {
         Error::NotFound("NOPE".to_owned())
+    }
+
+    fn unsupported() -> Error {
+        Error::Unsupported {
+            provider: "yahoo",
+            message: "mcx".to_owned(),
+        }
+    }
+
+    #[tokio::test]
+    async fn unsupported_requests_move_on_quietly() {
+        let f = FallbackProvider::new(vec![
+            Arc::new(Failing("yahoo", unsupported)),
+            Arc::new(DemoProvider::new()),
+        ]);
+        let (_, source) = f
+            .candles_with_source("MCX:GOLD", Interval::Day)
+            .await
+            .unwrap();
+        assert_eq!(source, "demo");
+        let alone = FallbackProvider::new(vec![Arc::new(Failing("yahoo", unsupported))]);
+        assert!(matches!(
+            alone.quotes(&[]).await.unwrap_err(),
+            Error::Unsupported { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn news_skips_providers_without_any() {
+        // Demo has no news: an empty list, attributed to it, not an error.
+        let f = FallbackProvider::new(vec![
+            Arc::new(DemoProvider::new()),
+            Arc::new(Failing("other", upstream)),
+        ]);
+        let (items, source) = f.news_with_source("ACE").await.unwrap();
+        assert!(items.is_empty());
+        assert_eq!(source, "demo");
+        let failing = FallbackProvider::new(vec![Arc::new(Failing("other", upstream))]);
+        assert!(
+            failing.news_with_source("ACE").await.is_ok(),
+            "default news() is empty, not an error"
+        );
     }
 
     fn upstream() -> Error {

@@ -14,16 +14,18 @@ pub mod nse;
 pub mod nse_events;
 pub mod rate;
 mod types;
+pub mod yahoo;
 
 pub use demo::DemoProvider;
 pub use error::{Error, Result};
 pub use fallback::FallbackProvider;
 pub use indmoney::IndmoneyProvider;
 pub use mcp::{StaticToken, TokenSource};
-pub use nse::{EodData, EodSeries, NseEod};
+pub use nse::{EodData, EodSeries, NseEod, NseEodProvider};
 pub use nse_events::{Catalyst, CatalystKind, EventData, NseEvents, Tone};
 pub use rate::RateLimiter;
 pub use types::{Interval, Market, NewsItem, ParseIntervalError, Quote};
+pub use yahoo::YahooProvider;
 
 use async_trait::async_trait;
 use swing_core::Candle;
