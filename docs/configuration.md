@@ -21,7 +21,7 @@ Use `KEY=value`, one per line, and double-quote values that contain spaces (`NEX
 | `BIND_ADDR` | `0.0.0.0:8080` | Address and port to listen on. |
 | `API_TOKEN` | — | Shared secret for `Authorization: Bearer ...` on `/v1/*`. Required unless `ALLOW_NO_TOKEN=true`. Generate with `openssl rand -hex 32`. |
 | `ALLOW_NO_TOKEN` | `false` | Lets the API start without `API_TOKEN`. Local experiments only. |
-| `DATA_PROVIDERS` | `indmoney,demo` | Comma-separated provider ids, tried in order. `demo` alone needs no account. |
+| `DATA_PROVIDERS` | `yahoo,indmoney,nse,demo` | Comma-separated provider ids, tried in order; the first that can answer wins. `yahoo`: Yahoo Finance's public chart endpoint, no account (NSE and US quotes, daily and 15-minute bars; unofficial). `indmoney`: needs `swing-api login indmoney`; skipped when not logged in (the only real source for MCX). `nse`: daily and weekly charts and end-of-day quotes from the cached NSE files (needs `NSE_EOD`). `demo`: synthetic data; alone it needs no network at all. See [ADR 0005](decisions/0005-login-free-data-first.md). |
 | `INDMONEY_MCP_URL` | `https://mcp.indmoney.com/mcp` | INDmoney MCP endpoint. |
 | `INDMONEY_TOKEN_FILE` | `.data/indmoney-token.json` | Where `swing-api login indmoney` saves the OAuth token and where `serve` reads it. Relative to the working directory. Docker Compose sets `/app/.data/indmoney-token.json` (host `./.data/`). |
 | `INDMONEY_ACCESS_TOKEN` | *(empty)* | If set, used instead of the token file. |
@@ -30,7 +30,7 @@ Use `KEY=value`, one per line, and double-quote values that contain spaces (`NEX
 | `DEFAULT_CAPITAL` | `500000` | Capital in rupees for position sizing, when the request has no `capital`. |
 | `DEFAULT_RISK` | `0.01` | Fraction of capital risked per trade, when the request has no `risk`. |
 | `QUOTE_TTL_SECS` | `15` | Quote cache lifetime. |
-| `CANDLE_TTL_SECS` | `600` | Candle cache lifetime for the first provider in `DATA_PROVIDERS`. Candles from a fallback provider use `QUOTE_TTL_SECS`. |
+| `CANDLE_TTL_SECS` | `600` | Candle cache lifetime for real providers. Demo candles served because every real provider failed use `QUOTE_TTL_SECS`, so real data returns quickly. |
 | `INDMONEY_RATE_PER_MIN` | `55` | Client-side INDmoney budget in cost units per minute (the server allows 60; OHLC costs 2). Shared by page requests and scans. |
 | `INDMONEY_RATE_PER_HOUR` | `450` | Client-side INDmoney budget per hour (the server allows 500). When it is spent, pages fail fast (or fall back) instead of hanging. |
 | `US_WATCHLIST` | `AAPL,MSFT,NVDA,GOOGL,AMZN,META,TSLA` | Default symbols for the US Stock page (`market=us`). |

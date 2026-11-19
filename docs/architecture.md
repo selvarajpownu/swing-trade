@@ -27,7 +27,7 @@ flowchart LR
 1. Browser requests `/stocks/COFORGE` from the Next.js server.
 2. Next.js calls `GET /v1/stocks/COFORGE?interval=1d` on the API with `Authorization: Bearer <API_TOKEN>`.
 3. The API returns cached quote/candles if still fresh (`QUOTE_TTL_SECS`, `CANDLE_TTL_SECS`), otherwise asks the `FallbackProvider`.
-4. The `FallbackProvider` tries each provider in `DATA_PROVIDERS` order and uses the first that succeeds. The response's `provider` field names it.
+4. The `FallbackProvider` tries each provider in `DATA_PROVIDERS` order (default `yahoo,indmoney,nse,demo`) and uses the first that succeeds. The response's `provider` field names it. A provider that does not cover the request (`Unsupported`, e.g. Yahoo for MCX) is skipped quietly; "symbol not found" from a real provider is final.
 5. `swing_core::analyze` computes SMAs, RSI, ATR, zones and the best setup with its trade plan, sized with the request's `capital` and `risk` (defaults `DEFAULT_CAPITAL`, `DEFAULT_RISK`).
 6. The API returns JSON; Next.js renders the page.
 
@@ -42,6 +42,8 @@ pub trait MarketData: Send + Sync {
 }
 ```
 
+- **Yahoo** (`market-data/src/yahoo.rs`) calls Yahoo Finance's public chart endpoint: one request per symbol returns the quote and the bars (daily for a year, or 15-minute for five days), cached 30 seconds and rate limited. NSE symbols get `.NS`; US tickers are used as they are; MCX is not covered. No account. Unofficial, so it sits in front of INDmoney rather than replacing it.
+- **NSE files as a provider** (`NseEodProvider`): daily and weekly candles and end-of-day quotes for the scan universe from the cached NSE files; the last real fallback before demo.
 - **INDmoney** talks to the INDmoney MCP server (`INDMONEY_MCP_URL`) with an OAuth access token. `swing-api login indmoney` runs the login once and stores the token in `INDMONEY_TOKEN_FILE`; `INDMONEY_ACCESS_TOKEN` overrides the file.
 - **Markets:** `market=in|us|mcx` on the stock routes. Providers receive market-qualified keys (`ACE`, `US:AAPL`,
   `MCX:GOLD`; see `Market::key`). US data comes from INDmoney's US tools (daily candles only; weekly is aggregated,
@@ -49,7 +51,7 @@ pub trait MarketData: Send + Sync {
 - **INDmoney rate limits:** 60 cost units per minute **and 500 per hour** across all tools (OHLC costs 2). A throttled call returns `{"error":"rate_limit_exceeded","retry_after_seconds":N,...}`; the provider waits and retries when N ≤ 5 s (twice at most), otherwise it fails with `Upstream` and the fallback answers. Login requests only the read scopes INDmoney advertises (write scopes such as `insights:write` are dropped). A call never waits more than 8 s for budget: it fails with
   `RateLimited` instead, so pages answer promptly, while the scanner waits and retries.
 - **Demo** generates sample data so the app works with no account. Prices are not real.
-- **Caching across providers:** candles from the first provider in `DATA_PROVIDERS` are cached for `CANDLE_TTL_SECS`; candles served by a fallback are cached only for `QUOTE_TTL_SECS`, so real data returns quickly after a hiccup.
+- **Caching across providers:** candles from real providers are cached for `CANDLE_TTL_SECS`; demo candles served because every real provider failed are cached only for `QUOTE_TTL_SECS`, so real data returns quickly after a hiccup.
 - Adding a source (e.g. Kite Connect in phase 5) means one new type implementing the trait and one new id in `DATA_PROVIDERS`. See [ADR 0004](decisions/0004-pluggable-market-data.md).
 
 ## Swing engine

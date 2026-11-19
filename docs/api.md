@@ -19,7 +19,10 @@ The Rust service (`services/api`) serves JSON. The Next.js app (`apps/web`) call
 prices in USD) or `mcx` (MCX commodity futures, near-month contract, prices in INR). Responses carry `market` and
 `currency` (`INR` or `USD`); every price in the response is in that currency. Symbols are always bare (`AAPL`, `GOLD`).
 
-- US: `interval=15m` is a 400 (daily data only); `capital` defaults to `US_DEFAULT_CAPITAL` (USD).
+- US: `capital` defaults to `US_DEFAULT_CAPITAL` (USD). 15-minute bars come from Yahoo (INDmoney has none).
+
+`provider` in a response is the source that answered: `yahoo`, `indmoney`, `nse` (cached NSE end-of-day files) or
+`demo`. The order is `DATA_PROVIDERS`.
 - MCX: setups have `quantity: null` (futures trade in lots, and lot sizes are not available).
 
 ## GET /v1/stocks
@@ -108,8 +111,12 @@ Query: `market`, `interval` (`1d` default, `1w`, `15m`), `capital`, `risk` as ab
 
 ## GET /v1/stocks/{symbol}/news
 
-Headlines from the data provider (INDmoney news: title, summary, sentiment; no publisher or link). Query: `market`.
-Cached 30 minutes. MCX and demo return an empty list; headlines are never invented.
+Headlines for one stock. Query: `market`. Cached 30 minutes; headlines are never invented.
+
+- `provider: "indmoney"`: INDmoney news (title, summary, sentiment; no publisher or link), when INDmoney has any.
+- `provider: "google_news"`: otherwise Google News RSS for the company's name (publisher and link; `summary` and
+  `sentiment` are `null`).
+- With only `demo` configured the list is empty and nothing is fetched.
 
 ```json
 {

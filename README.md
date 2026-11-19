@@ -71,7 +71,7 @@ cp .env.example .env
 openssl rand -hex 32        # paste the output into API_TOKEN in .env
 ```
 
-No INDmoney account? Set `DATA_PROVIDERS=demo` in `.env` (see [Demo mode](#demo-mode)).
+No INDmoney account? The default works without one: NSE and US prices come from Yahoo Finance; INDmoney is only needed for MCX commodities and its sentiment news. For a fully offline run set `DATA_PROVIDERS=demo` in `.env` (see [Demo mode](#demo-mode)).
 
 ### 2. Run the API
 
@@ -139,7 +139,7 @@ All settings are environment variables, read from `.env` at the repo root. Full 
 | `BIND_ADDR` | `0.0.0.0:8080` | API | Listen address |
 | `API_TOKEN` | *(required)* | API, web | Bearer token for `/v1/*` |
 | `ALLOW_NO_TOKEN` | `false` | API | Allow running without `API_TOKEN` (local only) |
-| `DATA_PROVIDERS` | `indmoney,demo` | API | Providers in fallback order |
+| `DATA_PROVIDERS` | `yahoo,indmoney,nse,demo` | API | Providers in fallback order (Yahoo needs no account) |
 | `INDMONEY_MCP_URL` | `https://mcp.indmoney.com/mcp` | API | INDmoney MCP endpoint |
 | `INDMONEY_TOKEN_FILE` | `.data/indmoney-token.json` | API | Saved OAuth token |
 | `INDMONEY_ACCESS_TOKEN` | *(empty)* | API | Use this token instead of the file |
@@ -156,7 +156,7 @@ All settings are environment variables, read from `.env` at the repo root. Full 
 
 ## Demo mode
 
-Set `DATA_PROVIDERS=demo` to run with generated sample data and no account at all. Everything works the same (list, charts, setups), but the prices are not real. With the default `indmoney,demo`, the demo provider also acts as a fallback when INDmoney is not logged in or not reachable; the `provider` field in every API response tells you which source answered.
+Set `DATA_PROVIDERS=demo` to run with generated sample data and no account at all. Everything works the same (list, charts, setups), but the prices are not real. With the default `yahoo,indmoney,nse,demo`, real data comes from Yahoo Finance (no account), then INDmoney (if logged in), then the cached NSE files; demo only answers when all of those fail. The `provider` field in every API response, and the label next to the quote time, tell you which source answered.
 
 ## Testing and linting
 

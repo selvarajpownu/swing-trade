@@ -19,8 +19,11 @@ Design doc (living): https://claude.ai/artifact/MPfWPrQPgf93TtCydTrLr8
   Python only if a specific library truly needs it (would live in `services/quant`, not created yet).
 - **Hosting:** free setup first (Vercel Hobby for web; Oracle Always Free ARM VM or own laptop + Cloudflare Tunnel
   for the API). No database in phase 1 (in-memory TTL caches).
-- **Data:** INDmoney MCP first (`https://mcp.indmoney.com/mcp`, OAuth 2.1 + PKCE, read-only), demo provider as
-  fallback. Connectors are pluggable behind the `MarketData` trait; Kite/Upstox/Dhan come later.
+- **Data (owner's decision 19 Nov 2026, ADR 0005):** login-free sources first. `DATA_PROVIDERS=yahoo,indmoney,nse,demo`:
+  Yahoo Finance chart endpoint (no account) for NSE and US quotes and charts; INDmoney MCP
+  (`https://mcp.indmoney.com/mcp`, OAuth 2.1 + PKCE, read-only) as fallback and the only source for MCX and
+  sentiment news; NSE's public files for scans, the swing screen and daily-chart fallback; demo last. Connectors are
+  pluggable behind the `MarketData` trait; Kite/Upstox/Dhan come later.
 - Trade plans are for the owner only; sharing them publicly may need SEBI research-analyst registration.
 - The owner already holds Indraprastha Medical Corporation — never include it in "top" lists.
 
@@ -55,6 +58,10 @@ page, Home "Top setups" (never "recommended": wording rule), shared INDmoney rat
 learns tool costs, fails fast), golden preset tests on real candles; IN Stock / US Stock / Commodity / Stock news
 sections (`market=in|us|mcx`, `Market::key` prefixes `US:`/`MCX:`), INDmoney news per stock, Google News RSS page.
 Next: see docs/roadmap.md Phase 2 "Next".
+
+**19 Nov 2026, login-free data:** `market-data/src/yahoo.rs` (quotes + daily + 15m from one chart request, 30 s cache,
+own rate limiter), `NseEodProvider` in `nse.rs`, `Error::Unsupported` (quiet fail-over), stock-page news falls back
+to Google News RSS, US 15m enabled. Yahoo's intraday delay for NSE is NOT yet measured (market was closed).
 
 **19 Nov 2026:** Swing Stocks IN page (`/swing`, `GET /v1/swing`, `swing-core/src/screen.rs`,
 `api-server/src/swing.rs`). Scans read NSE's public end-of-day files (`market-data/src/nse.rs`, `NSE_EOD`), so a
