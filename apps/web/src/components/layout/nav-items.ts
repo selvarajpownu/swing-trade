@@ -8,6 +8,7 @@ import {
   NotebookPen,
   Radar,
   Settings,
+  TrendingUp,
   type LucideIcon,
 } from "lucide-react";
 
@@ -25,9 +26,11 @@ export interface NavItem {
 
 export const NAV_ITEMS: readonly NavItem[] = [
   { href: "/", label: "Home", shortLabel: "Home", icon: House, exact: true, mobile: true },
+  { href: "/swing", label: "Swing Stocks IN", shortLabel: "Swing", icon: TrendingUp, mobile: true },
   { href: "/stocks", label: "IN Stock", shortLabel: "IN", icon: IndianRupee, mobile: true },
   { href: "/us", label: "US Stock", shortLabel: "US", icon: DollarSign, mobile: true },
-  { href: "/commodities", label: "Commodity", shortLabel: "MCX", icon: Gem, mobile: true },
+  // Reachable on phones from the market tabs on the IN and US pages.
+  { href: "/commodities", label: "Commodity", shortLabel: "MCX", icon: Gem },
   { href: "/news", label: "Stock news", shortLabel: "News", icon: Newspaper, mobile: true },
   { href: "/scan", label: "Scanner", shortLabel: "Scanner", icon: Radar },
   { href: "/watchlists", label: "Watchlists", shortLabel: "Watchlists", icon: Bookmark },

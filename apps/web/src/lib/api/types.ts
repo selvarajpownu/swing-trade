@@ -209,6 +209,110 @@ export interface HeadlinesResponse {
   items: Headline[];
 }
 
+/** GET /v1/swing */
+export type SwingTab = "breakout" | "pullback" | "leaders";
+export type SwingGate = "tradable" | "leader" | "sector";
+export type RegimeState = "normal" | "caution" | "defensive";
+
+export interface SwingStatus {
+  /** `syncing`: NSE files are still downloading and there is nothing to show yet. */
+  state: "pending" | "syncing" | "ready";
+  scan: ScanPhase;
+  universe_size: number;
+  failed: number;
+  excluded: string[];
+  /** NSE end-of-day sessions cached; null when NSE files are not used. */
+  days_cached: number | null;
+  days_target: number | null;
+  error: string | null;
+}
+
+export interface SwingRegime {
+  state: RegimeState;
+  index: string | null;
+  index_close: number | null;
+  index_sma50: number | null;
+  index_sma200: number | null;
+  breadth_50_pct: number;
+  breadth_200_pct: number;
+  universe: number;
+}
+
+export interface SwingSector {
+  industry: string;
+  members: number;
+  ret_3m_pct: number;
+  rank: number;
+  strong: boolean;
+}
+
+export interface SwingSetup {
+  kind: "breakout" | "pullback";
+  label: string;
+  /** 0-100 */
+  score: number;
+  score_breakdown: {
+    rs: number;
+    trend: number;
+    setup: number;
+    sector: number;
+    delivery: number;
+    quality: number;
+  };
+  /** Breakout level, or the swing high a pullback came from. */
+  level: number;
+  extension_pct: number;
+  volume_ratio: number;
+  entry: number;
+  stop: number;
+  risk_per_share: number;
+  target_2r: number;
+  target_3r: number;
+  quantity: number;
+  /** Six weeks after the setup bar, YYYY-MM-DD. */
+  review_by: string | null;
+  reasons: string[];
+}
+
+export interface SwingItem {
+  symbol: string;
+  name: string;
+  exchange: string;
+  industry: string | null;
+  /** Latest daily close. */
+  price: number;
+  change: number;
+  change_pct: number;
+  volume: number;
+  bar_time: number;
+  sparkline: number[];
+  /** Median 20-day turnover in crore rupees. */
+  turnover_cr: number;
+  /** Relative-strength rating, 0-100. */
+  rs: number | null;
+  ret_1m_pct: number | null;
+  ret_3m_pct: number | null;
+  ret_6m_pct: number | null;
+  below_high_pct: number;
+  delivery_pct: number | null;
+  delivery_avg20: number | null;
+  gates: { tradable: boolean; leader: boolean; sector: boolean | null };
+  setup: SwingSetup | null;
+}
+
+export interface SwingResponse {
+  /** `nse` (NSE end-of-day files) or a provider id; null before the first scan. */
+  source: ProviderName | null;
+  /** Date of the newest daily bar, YYYY-MM-DD. */
+  as_of: string | null;
+  status: SwingStatus;
+  regime: SwingRegime | null;
+  sectors: SwingSector[];
+  counts: Record<SwingTab, number>;
+  total: number;
+  items: SwingItem[];
+}
+
 export interface HealthResponse {
   status: string;
   version: string;

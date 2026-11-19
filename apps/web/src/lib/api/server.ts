@@ -7,6 +7,8 @@ import type {
   HealthResponse,
   Market,
   StockNewsResponse,
+  SwingResponse,
+  SwingTab,
   ScanResponse,
   SetupPreset,
   SetupState,
@@ -220,6 +222,32 @@ export async function getScan(params: GetScanParams = {}): Promise<ScanResponse>
       min_score: params.minScore || undefined,
       min_rr: params.minRr || undefined,
       state: params.state,
+      limit: params.limit,
+      capital: params.capital,
+      risk: riskFraction(params.riskPct),
+    },
+  });
+  assertShape(Array.isArray(data.items), "`items`");
+  assertShape(typeof data.status === "object" && data.status !== null, "`status`");
+  return data;
+}
+
+export interface GetSwingParams {
+  setup?: SwingTab;
+  /** Comma-separated gates to require, or `none`; omit for all three. */
+  gates?: string;
+  limit?: number;
+  capital?: number;
+  /** Risk per trade in PERCENT (1 = 1%). Converted to a fraction for the API. */
+  riskPct?: number;
+}
+
+/** GET /v1/swing */
+export async function getSwing(params: GetSwingParams = {}): Promise<SwingResponse> {
+  const data = await request<SwingResponse>("/v1/swing", {
+    query: {
+      setup: params.setup,
+      gates: params.gates,
       limit: params.limit,
       capital: params.capital,
       risk: riskFraction(params.riskPct),
