@@ -47,7 +47,7 @@ export const MARKETS: Record<Market, MarketInfo> = {
     path: "/us",
     currency: "USD",
     defaultCapital: 5_000,
-    intervals: ["1d", "1w"],
+    intervals: ["1d", "1w", "15m"],
     noun: "stocks",
     description: "US stocks in your watchlist (prices in US dollars)",
   },
@@ -69,6 +69,24 @@ export const MARKET_ORDER: readonly Market[] = ["in", "us", "mcx"];
 
 export function isMarket(value: unknown): value is Market {
   return value === "in" || value === "us" || value === "mcx";
+}
+
+/** Display name of a data provider id from the API. */
+export function providerLabel(provider: string | null | undefined): string {
+  switch (provider) {
+    case "yahoo":
+      return "Yahoo Finance";
+    case "indmoney":
+      return "INDmoney";
+    case "nse":
+      return "NSE end-of-day files";
+    case "google_news":
+      return "Google News";
+    case "demo":
+      return "demo data";
+    default:
+      return provider ?? "unknown source";
+  }
 }
 
 /** Market of a quote's exchange label: `US`, `MCX`, anything else is NSE. */

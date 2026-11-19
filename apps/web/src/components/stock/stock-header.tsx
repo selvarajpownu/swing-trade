@@ -1,5 +1,6 @@
 import type { Quote, SetupDetail } from "@/lib/api/types";
 import { formatDateTimeIST, formatPrice, formatVolume } from "@/lib/format";
+import { providerLabel } from "@/lib/markets";
 
 import { SetupBadge } from "@/components/stocks/setup-badge";
 import { PriceChange } from "@/components/ui/price-change";
@@ -9,6 +10,8 @@ interface StockHeaderProps {
   quote: Quote;
   setup: SetupDetail | null;
   currency?: string;
+  /** Provider id that served the quote, e.g. `yahoo`. */
+  provider?: string;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
@@ -20,7 +23,7 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function StockHeader({ quote, setup, currency = "INR" }: StockHeaderProps) {
+export function StockHeader({ quote, setup, currency = "INR", provider }: StockHeaderProps) {
   return (
     <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
       <div className="flex min-w-0 items-start gap-3">
@@ -44,6 +47,7 @@ export function StockHeader({ quote, setup, currency = "INR" }: StockHeaderProps
             />
             <span className="text-xs text-subtle" suppressHydrationWarning>
               Updated {formatDateTimeIST(quote.updated_at)}
+              {provider ? ` · ${providerLabel(provider)}` : ""}
             </span>
           </div>
         </div>

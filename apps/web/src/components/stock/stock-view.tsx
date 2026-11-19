@@ -81,7 +81,7 @@ export function StockView({
         {info.label}
       </Link>
 
-      <StockHeader quote={quote} setup={setup} currency={currency} />
+      <StockHeader quote={quote} setup={setup} currency={currency} provider={data.provider} />
 
       {error ? (
         <p

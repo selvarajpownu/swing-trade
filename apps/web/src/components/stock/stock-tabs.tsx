@@ -22,7 +22,7 @@ const TABS: readonly TabDef[] = [
     id: "news",
     label: "News",
     icon: Newspaper,
-    blurb: "Recent headlines for this stock from INDmoney.",
+    blurb: "Recent headlines for this stock.",
   },
   {
     id: "filings",
@@ -197,8 +197,9 @@ function NewsPanel({ symbol, news, newsError }: StockTabsProps) {
       <>
         <NewsList items={news.items} />
         <p className="border-t border-line px-4 py-3 text-xs text-subtle sm:px-5">
-          Headlines and summaries from INDmoney (AI-written; sentiment is theirs). Check the
-          original announcement before relying on them.
+          {news.provider === "google_news"
+            ? "Headlines via Google News, matched by company name, so some may be about the wider market. Links open the publisher's article."
+            : "Headlines and summaries from INDmoney (AI-written; sentiment is theirs). Check the original announcement before relying on them."}
         </p>
       </>
     );
@@ -206,7 +207,7 @@ function NewsPanel({ symbol, news, newsError }: StockTabsProps) {
   const message = newsError
     ? `Could not load news: ${newsError}`
     : news?.provider === "demo"
-      ? "Demo data has no news. Headlines appear when INDmoney is connected."
-      : `No recent headlines for ${symbol} from INDmoney.`;
+      ? "Demo data has no news."
+      : `No recent headlines found for ${symbol}.`;
   return <p className="px-6 py-10 text-center text-sm text-muted">{message}</p>;
 }
