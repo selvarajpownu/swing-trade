@@ -10,9 +10,9 @@
 //!    rising averages, near its 52-week high.
 //! 3. **Sector**: the stock's industry is in the stronger half.
 //!
-//! Setups on the latest bar: [`SwingKind::Breakout`] and
-//! [`SwingKind::Pullback`]. Every threshold is a starting value to be
-//! back-tested, not a proven rule.
+//! Setups: [`SwingKind::Breakout`] and [`SwingKind::Pullback`] on the latest
+//! bar, and [`SwingKind::ResultsGap`] within three bars of a results-day gap.
+//! Every threshold is a starting value to be back-tested, not a proven rule.
 
 use std::collections::HashMap;
 
@@ -41,6 +41,9 @@ pub struct ScreenInput<'a> {
     pub delivery: &'a [Option<f64>],
     /// False for trade-to-trade and other restricted series.
     pub main_series: bool,
+    /// Session timestamps (same clock as `Candle::ts`) of board meetings on
+    /// financial results; empty when unknown.
+    pub results: &'a [i64],
 }
 
 /// Thresholds of the screen. Defaults are the documented starting values.
@@ -73,6 +76,14 @@ pub struct ScreenParams {
     pub capital: f64,
     /// Fraction of capital risked per trade.
     pub risk_per_trade: f64,
+    /// Results gap: smallest opening gap, as a fraction.
+    pub results_min_gap: f64,
+    /// Results gap: volume against the prior 20-day average.
+    pub results_min_volume: f64,
+    /// Results gap: the gap bar is one of the last this-many bars.
+    pub results_max_bars: usize,
+    /// Results gap: a close further than this above the gap-day high is "extended".
+    pub results_max_extension: f64,
 }
 
 impl Default for ScreenParams {
@@ -93,6 +104,10 @@ impl Default for ScreenParams {
             entry_buffer: 0.001,
             capital: 500_000.0,
             risk_per_trade: 0.01,
+            results_min_gap: 0.04,
+            results_min_volume: 3.0,
+            results_max_bars: 3,
+            results_max_extension: 0.05,
         }
     }
 }
@@ -193,6 +208,8 @@ pub enum SwingKind {
     Breakout,
     /// A dip in an uptrend that touched its averages and turned up.
     Pullback,
+    /// A gap up on heavy volume in reaction to financial results, still holding.
+    ResultsGap,
 }
 
 impl SwingKind {
@@ -200,6 +217,7 @@ impl SwingKind {
         match self {
             SwingKind::Breakout => "breakout",
             SwingKind::Pullback => "pullback",
+            SwingKind::ResultsGap => "results_gap",
         }
     }
 
@@ -207,6 +225,7 @@ impl SwingKind {
         match self {
             SwingKind::Breakout => "Breakout",
             SwingKind::Pullback => "Pullback",
+            SwingKind::ResultsGap => "Results gap",
         }
     }
 }
@@ -362,7 +381,12 @@ pub fn run(inputs: &[ScreenInput<'_>], params: &ScreenParams) -> Screen {
             b.row.gates.sector = sector.map(|s| s.strong);
             b.row.gates.leader = is_leader(&b, params);
             let common = common_score(&b, sector, sectors.len());
-            let mut setups: Vec<SwingSetup> = [breakout(&b, params), pullback(&b, params)]
+            let found = [
+                breakout(&b, params),
+                pullback(&b, params),
+                results_gap(&b, params),
+            ];
+            let mut setups: Vec<SwingSetup> = found
                 .into_iter()
                 .flatten()
                 .map(|mut s| {
@@ -750,6 +774,84 @@ fn pullback(b: &Base<'_>, params: &ScreenParams) -> Option<SwingSetup> {
     })
 }
 
+/// The reaction to results: the session of the board meeting, or the next
+/// one when results came out after the close (or on a non-trading day).
+fn is_results_reaction(results: &[i64], prev_ts: i64, bar_ts: i64) -> bool {
+    results
+        .iter()
+        .any(|d| *d == bar_ts || (prev_ts <= *d && *d < bar_ts))
+}
+
+fn results_gap(b: &Base<'_>, params: &ScreenParams) -> Option<SwingSetup> {
+    let c = b.input.candles;
+    let n = c.len();
+    if n < 25 || b.input.results.is_empty() {
+        return None;
+    }
+    let last = c[n - 1];
+    let atr = b.row.atr14?;
+    for back in 0..params.results_max_bars {
+        let g = n - 1 - back;
+        if g < 21 {
+            break;
+        }
+        let (bar, prev) = (c[g], c[g - 1]);
+        if !is_results_reaction(b.input.results, prev.ts, bar.ts) || prev.close <= 0.0 {
+            continue;
+        }
+        let gap = bar.open / prev.close - 1.0;
+        let avg = c[g - 20..g].iter().map(|x| x.volume).sum::<f64>() / 20.0;
+        if avg <= 0.0 {
+            continue;
+        }
+        let volume_ratio = bar.volume / avg;
+        let position = close_position(&bar);
+        let held = c[g + 1..].iter().all(|x| x.close >= bar.low);
+        let extension = (last.close / bar.high - 1.0).max(0.0);
+        let fires = gap >= params.results_min_gap
+            && volume_ratio >= params.results_min_volume
+            && position >= 0.5
+            && held
+            && extension <= params.results_max_extension;
+        if !fires {
+            continue;
+        }
+
+        // Entry above the highest high since the gap; stop below the gap-day low.
+        let entry_high = c[g..].iter().map(|x| x.high).fold(f64::MIN, f64::max);
+        let plan = plan(entry_high, bar.low - 0.1 * atr, atr, params)?;
+        let freshness = [5.0, 3.0, 1.0].get(back).copied().unwrap_or(0.0);
+        let setup_points = (gap / 0.08).min(1.0) * 10.0
+            + (volume_ratio / 5.0).min(1.0) * 10.0
+            + position * 5.0
+            + freshness;
+        let when = match back {
+            0 => "The results reaction was the latest session".to_owned(),
+            1 => "Holding above the results-day low one session later".to_owned(),
+            k => format!("Holding above the results-day low {k} sessions later"),
+        };
+        return Some(SwingSetup {
+            kind: SwingKind::ResultsGap,
+            level: bar.high,
+            extension_pct: extension * 100.0,
+            volume_ratio,
+            plan,
+            score: SwingScore {
+                setup: setup_points,
+                ..SwingScore::default()
+            },
+            reasons: vec![
+                format!(
+                    "Gapped up {:.1}% on results with {volume_ratio:.1}x average volume",
+                    gap * 100.0
+                ),
+                when,
+            ],
+        });
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -780,6 +882,7 @@ mod tests {
             candles,
             delivery: &[],
             main_series: true,
+            results: &[],
         }
     }
 
@@ -935,6 +1038,88 @@ mod tests {
         assert!(run(&inputs, &ScreenParams::default()).rows[0]
             .setups
             .is_empty());
+    }
+
+    #[test]
+    fn detects_a_results_gap_that_holds() {
+        // Steady climb, then a 6% gap up on 4x volume on the results date.
+        let mut c = trend(100.0, 0.003, 240, 1_000_000.0);
+        let prev = c.last().unwrap().close;
+        let gap_ts = 240 * DAY;
+        c.push(Candle::new(
+            gap_ts,
+            prev * 1.06,
+            prev * 1.09,
+            prev * 1.05,
+            prev * 1.085,
+            4_000_000.0,
+        ));
+        let results = [gap_ts];
+        let with = |candles: &[Candle], results: &[i64]| {
+            let inputs = vec![ScreenInput {
+                results,
+                ..input("RES", "Tech", candles)
+            }];
+            run(&inputs, &ScreenParams::default()).rows[0]
+                .setups
+                .clone()
+        };
+
+        let setups = with(&c, &results);
+        assert_eq!(setups.len(), 1, "{setups:?}");
+        let s = &setups[0];
+        assert_eq!(s.kind, SwingKind::ResultsGap);
+        assert!((s.level - prev * 1.09).abs() < 1e-9);
+        assert!((s.volume_ratio - 4.0).abs() < 1e-9);
+        assert!(s.plan.stop < prev * 1.05 && s.plan.entry > prev * 1.09);
+        assert!(s.reasons[0].starts_with("Gapped up 6.0% on results"));
+
+        // Without a results date the same bar is just a gap.
+        assert!(with(&c, &[]).is_empty());
+        // Results after the close of the day before: the gap bar is the next session.
+        assert_eq!(with(&c, &[239 * DAY]).len(), 1);
+        // A results date a week earlier does not explain this gap.
+        assert!(with(&c, &[233 * DAY]).is_empty());
+
+        // Two quiet sessions later it still holds...
+        let mut later = c.clone();
+        for i in 1..=2 {
+            let p = prev * 1.08;
+            later.push(Candle::new(
+                gap_ts + i * DAY,
+                p,
+                p * 1.008,
+                p * 0.992,
+                p,
+                900_000.0,
+            ));
+        }
+        let held = with(&later, &results);
+        assert_eq!(held.len(), 1);
+        assert!(held[0].reasons[1].contains("2 sessions later"));
+        assert!(
+            held[0].score.setup < s.score.setup,
+            "older gaps score lower"
+        );
+        // ...but not after a close below the results-day low.
+        let last = later.last_mut().unwrap();
+        last.close = prev * 1.04;
+        last.low = prev * 1.035;
+        assert!(with(&later, &results).is_empty());
+        // And after three sessions it is no longer offered.
+        let mut stale = c.clone();
+        for i in 1..=3 {
+            let p = prev * 1.08;
+            stale.push(Candle::new(
+                gap_ts + i * DAY,
+                p,
+                p * 1.008,
+                p * 0.992,
+                p,
+                900_000.0,
+            ));
+        }
+        assert!(with(&stale, &results).is_empty());
     }
 
     #[test]
