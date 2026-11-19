@@ -10,6 +10,7 @@ mod fallback;
 pub mod indmoney;
 pub mod mcp;
 mod names;
+pub mod nse;
 pub mod rate;
 mod types;
 
@@ -18,6 +19,7 @@ pub use error::{Error, Result};
 pub use fallback::FallbackProvider;
 pub use indmoney::IndmoneyProvider;
 pub use mcp::{StaticToken, TokenSource};
+pub use nse::{EodData, EodSeries, NseEod};
 pub use rate::RateLimiter;
 pub use types::{Interval, Market, NewsItem, ParseIntervalError, Quote};
 
