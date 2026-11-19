@@ -8,6 +8,7 @@
 pub mod candle;
 pub mod indicators;
 pub mod plan;
+pub mod screen;
 pub mod setup;
 pub mod zones;
 
