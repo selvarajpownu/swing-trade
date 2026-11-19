@@ -28,6 +28,12 @@ Done:
 Next:
 - Done 11 Nov: scanner universe = NSE Nifty 500 list (`UNIVERSE_FILE`) plus the watchlist (503 stocks); a full
   refresh takes ~3.3 h at INDmoney's hourly limit, once per trading day, with hits shown as they are found.
+- Done 19 Nov: **Swing Stocks IN** page (`/swing`, `GET /v1/swing`) on NSE's free end-of-day files: market regime,
+  relative-strength leaders, sector strength, breakout and pullback setups with 2R / 3R plans. The scan now takes
+  seconds and no longer uses INDmoney.
+- Swing Stocks, next steps: catalyst feeds (results dates, corporate actions, bulk/block deals, insider trades,
+  surveillance list) with badges and a results-gap setup; a back-test of every preset on the NSE history; a quality
+  gate from Screener CSV exports; manual open positions for portfolio limits.
 - Google Finance-style range tabs (1D / 5D / 1M / 6M / YTD / 1Y) on the chart.
 - Scanner for US and MCX (today it scans NSE only).
 

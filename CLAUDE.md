@@ -56,6 +56,13 @@ learns tool costs, fails fast), golden preset tests on real candles; IN Stock / 
 sections (`market=in|us|mcx`, `Market::key` prefixes `US:`/`MCX:`), INDmoney news per stock, Google News RSS page.
 Next: see docs/roadmap.md Phase 2 "Next".
 
+**19 Nov 2026:** Swing Stocks IN page (`/swing`, `GET /v1/swing`, `swing-core/src/screen.rs`,
+`api-server/src/swing.rs`). Scans read NSE's public end-of-day files (`market-data/src/nse.rs`, `NSE_EOD`), so a
+503-stock scan takes ~2 s and uses no INDmoney budget. Design came from a ChatGPT playbook the owner shared; the
+owner approved: five gates (tradable, market, leader, sector, quality), breakout / pullback / results-gap setups,
+catalysts from NSE feeds. Built so far: gates 1-4, breakout, pullback. Not built: quality gate (needs Screener CSV),
+catalyst feeds and results-gap setup, back-test, open positions.
+
 Phase 1 (list + chart MVP) **builds, passes all checks and runs end to end on real INDmoney data** (Windows 11,
 Rust 1.90, Node 24).
 - Rust: `cargo build`, `cargo test` (76 tests: 34 api-server, 34 market-data, 8 swing-core incl. the owner's card
@@ -89,7 +96,15 @@ Known decisions/quirks:
   ~3.3 h per day. Throttled calls return a JSON error object
   inside a successful tool result; `IndmoneyProvider::call` waits ≤ 5 s and retries, else `Upstream` → fallback.
   Bursts (e.g. scripted checks of 30 charts) will hit it; normal browsing doesn't.
-- INDmoney access tokens last ~1 h; the stored refresh token renews them automatically.
+- INDmoney access tokens last ~1 h; the stored refresh token renews them automatically, but after about a week
+  without use INDmoney forgets the refresh token ("refresh token does not exist"): run `login indmoney` again.
+- NSE files (verified 19 Nov 2026, all free, need a browser-like User-Agent): full bhavcopy and index closes on
+  `nsearchives.nseindia.com`; corporate actions and the ASM list on `www.nseindia.com/api` (worked without cookies,
+  but that API is known to block bots, so treat it as fragile); RSS feeds for announcements, board meetings,
+  corporate actions, results and insider trades; `bulk.csv`, `block.csv`, `fo_secban.csv`. Holiday URLs re-serve the
+  previous session's file; Muhurat sessions fall on weekends; prices are unadjusted and NSE's PREV_CLOSE is adjusted
+  for consolidations but NOT for bonuses or splits.
+- REITs in the Nifty 500 list (EMBASSY, BIRET, BAGMANE) trade in series `RR` and are skipped by the NSE loader.
 - Web URLs use `risk` as a **percent** (`risk=1` = 1%); `server.ts` converts to the API's fraction (0.01).
 - `INDMONEY_TOKEN_FILE` is relative: `cargo run` from `services/api` writes `services/api/.data/`; Docker uses `./.data/`.
 - The demo provider's prices are synthetic; the UI shows a "DEMO DATA" pill when `provider == "demo"`.
