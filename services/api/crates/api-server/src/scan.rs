@@ -136,6 +136,15 @@ impl Scanner {
 pub async fn run_forever(state: AppState, universe: Universe) {
     let every = state.config.scan_interval_mins;
     let symbols: HashSet<String> = universe.entries.iter().map(|e| e.symbol.clone()).collect();
+    if let Some(eod) = &state.eod {
+        // Company names for end-of-day quotes (NSE's price files carry none).
+        let names = universe
+            .entries
+            .iter()
+            .filter_map(|e| Some((e.symbol.clone(), e.name.clone()?)))
+            .collect();
+        eod.set_names(names).await;
+    }
     loop {
         if let Some(eod) = &state.eod {
             match eod.sync(&symbols).await {

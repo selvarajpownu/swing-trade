@@ -209,7 +209,55 @@ pub async fn detail(
     )))
 }
 
-/// Recent headlines for one stock from the data provider (INDmoney news).
+/// Source label when a stock's headlines come from Google News RSS.
+const GOOGLE_NEWS: &str = "google_news";
+
+/// Headlines from the provider chain (INDmoney has them, with sentiment);
+/// when no provider has any, Google News RSS for the company's name.
+async fn provider_or_google_news(
+    state: &AppState,
+    key: &str,
+    market: Market,
+) -> Result<crate::state::CachedNews, ApiError> {
+    let from_provider = match state.market.news_with_source(key).await {
+        Ok((items, source)) if !items.is_empty() => return Ok((Arc::new(items), source)),
+        Ok((_, source)) => Ok(source),
+        Err(e) => Err(e),
+    };
+    // Demo-only mode stays offline: no Google either.
+    if state.market.ids().iter().all(|id| *id == "demo") {
+        return Ok((Arc::new(Vec::new()), from_provider?));
+    }
+    // Company names search far better than tickers; quotes are usually cached.
+    let bare = Market::split(key).1;
+    let name = match state.quotes(&[key.to_owned()]).await {
+        Ok((quotes, _)) => quotes.into_iter().next().map(|q| q.name),
+        Err(_) => None,
+    }
+    .unwrap_or_else(|| bare.to_owned());
+    match state
+        .google
+        .search(&crate::news::query_for(&name, market), market)
+        .await
+    {
+        Ok(items) if !items.is_empty() => Ok((items, GOOGLE_NEWS)),
+        Ok(items) => match from_provider {
+            Ok(source) => Ok((items, source)),
+            Err(_) => Ok((items, GOOGLE_NEWS)),
+        },
+        Err(google_error) => match from_provider {
+            // No provider news and no Google either: an honest empty list.
+            Ok(source) => {
+                tracing::warn!(symbol = %key, error = %google_error, "Google News fallback failed");
+                Ok((Arc::new(Vec::new()), source))
+            }
+            Err(e) => Err(e.into()),
+        },
+    }
+}
+
+/// Recent headlines for one stock: from the data provider (INDmoney news,
+/// with sentiment) or, failing that, Google News RSS (publisher and link).
 pub async fn news(
     State(state): State<AppState>,
     path: Result<Path<String>, PathRejection>,
@@ -224,9 +272,8 @@ pub async fn news(
     let (items, source) = match state.news.get(&key).await {
         Some(hit) => hit,
         None => {
-            let (items, source) = state.market.news_with_source(&key).await?;
-            let entry = (Arc::new(items), source);
-            state.news.insert(key, entry.clone()).await;
+            let entry = provider_or_google_news(&state, &key, market).await?;
+            state.news.insert(key.clone(), entry.clone()).await;
             entry
         }
     };

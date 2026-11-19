@@ -5,8 +5,8 @@ use std::time::Duration;
 
 use anyhow::bail;
 use market_data::{
-    indmoney, DemoProvider, Error as DataError, FallbackProvider, IndmoneyProvider, Interval,
-    MarketData, Quote,
+    indmoney, nse, yahoo, DemoProvider, Error as DataError, FallbackProvider, IndmoneyProvider,
+    Interval, MarketData, NseEodProvider, Quote, YahooProvider,
 };
 use swing_core::Candle;
 
@@ -38,7 +38,7 @@ pub struct AppState {
     pub news: Arc<TtlCache<String, CachedNews>>,
     /// Google News RSS client for the Stock news page.
     pub google: Arc<GoogleNews>,
-    /// NSE end-of-day files, when enabled and the primary provider is real.
+    /// NSE end-of-day files, when enabled and a real provider is configured.
     pub eod: Option<Arc<market_data::NseEod>>,
     /// NSE catalysts (results dates, filings, deals); enabled with `eod`.
     pub events: Option<Arc<market_data::NseEvents>>,
@@ -49,7 +49,7 @@ pub type CachedNews = (Arc<Vec<market_data::NewsItem>>, &'static str);
 
 impl AppState {
     /// State with caches sized from `config`.
-    pub fn new(config: Config, market: FallbackProvider) -> Self {
+    pub fn new(config: Config, mut market: FallbackProvider) -> Self {
         let quotes = TtlCache::new(
             Duration::from_secs(config.quote_ttl_secs),
             QUOTE_CACHE_CAPACITY,
@@ -58,10 +58,14 @@ impl AppState {
             Duration::from_secs(config.candle_ttl_secs),
             CANDLE_CACHE_CAPACITY,
         );
-        // Scans read only the primary provider; never a fallback.
-        let primary = market.ids().first().copied().unwrap_or("demo");
-        // Demo mode stays offline: no NSE downloads.
-        let eod = (config.nse_eod && primary != "demo")
+        // Demo-only mode stays offline: no NSE downloads.
+        let listed = config.providers();
+        let wants_nse = listed.iter().any(|id| id == nse::ID);
+        let real = market.ids().iter().any(|id| *id != "demo") || wants_nse;
+        if wants_nse && !config.nse_eod {
+            tracing::warn!("DATA_PROVIDERS lists `nse` but NSE_EOD is off; skipping it");
+        }
+        let eod = (config.nse_eod && real)
             .then(|| market_data::NseEod::new(&config.nse_eod_dir, config.nse_eod_days))
             .and_then(|built| match built {
                 Ok(eod) => Some(Arc::new(eod)),
@@ -79,6 +83,18 @@ impl AppState {
                         None
                     }
                 });
+        // `nse` in DATA_PROVIDERS: serve daily charts from the same files, at
+        // its place in the order among the providers that were built.
+        if let (true, Some(eod)) = (wants_nse, &eod) {
+            let before = listed
+                .iter()
+                .take_while(|id| *id != nse::ID)
+                .filter(|id| market.get(id).is_some())
+                .count();
+            market.insert(before, Arc::new(NseEodProvider::new(eod.clone())));
+        }
+        // Scans fall back to the first provider only when NSE files are not in use.
+        let primary = market.ids().first().copied().unwrap_or("demo");
         Self {
             eod,
             events,
@@ -186,16 +202,16 @@ impl AppState {
         Ok(candles)
     }
 
-    /// Candles from the first provider in `DATA_PROVIDERS` keep the full
-    /// candle TTL. Anything served by a fallback (usually demo, after an
-    /// INDmoney hiccup) lives only as long as a quote, so real data returns
-    /// as soon as the primary source recovers.
+    /// Real candles keep the full candle TTL. Demo candles served because
+    /// every real source failed live only as long as a quote, so real data
+    /// returns as soon as a source recovers. (With demo as the only provider
+    /// there is nothing to recover to, so it keeps the full TTL.)
     fn candle_ttl(&self, source: &'static str) -> Duration {
-        let primary = self.market.ids().first().copied();
-        if primary == Some(source) {
-            self.candles.ttl()
-        } else {
+        let demo_only = self.market.ids().iter().all(|id| *id == "demo");
+        if source == "demo" && !demo_only {
             self.quotes.ttl()
+        } else {
+            self.candles.ttl()
         }
     }
 
@@ -209,7 +225,8 @@ impl AppState {
 /// Builds the provider chain from `DATA_PROVIDERS`.
 ///
 /// INDmoney is skipped with a warning when it has no credentials, so a
-/// fresh checkout still runs on demo data.
+/// fresh checkout still runs. `nse` is added by [`AppState::new`], which
+/// owns the NSE files it reads.
 pub fn build_market(config: &Config) -> anyhow::Result<FallbackProvider> {
     let mut providers: Vec<Arc<dyn MarketData>> = Vec::new();
     for id in config.providers() {
@@ -230,13 +247,16 @@ pub fn build_market(config: &Config) -> anyhow::Result<FallbackProvider> {
                     indmoney::oauth::ACCESS_TOKEN_ENV
                 ),
             },
+            yahoo::ID => providers.push(Arc::new(YahooProvider::new()?)),
+            nse::ID => {}
             "demo" => providers.push(Arc::new(DemoProvider::new())),
             other => bail!(
-                "unknown data provider `{other}` in DATA_PROVIDERS (expected indmoney or demo)"
+                "unknown data provider `{other}` in DATA_PROVIDERS (expected yahoo, indmoney, nse or demo)"
             ),
         }
     }
-    if providers.is_empty() {
+    let lists_nse = config.providers().iter().any(|id| id == nse::ID);
+    if providers.is_empty() && !(lists_nse && config.nse_eod) {
         bail!(
             "no usable data provider: run `swing-api login indmoney` or add `demo` to DATA_PROVIDERS"
         );
@@ -285,10 +305,65 @@ mod tests {
     #[test]
     fn fallback_candles_expire_with_quotes() {
         let state = AppState::new(test_config(), build_market(&test_config()).unwrap());
-        // `test_config` lists only demo, so demo is the primary source here.
+        // `test_config` lists only demo: nothing better to wait for.
         assert_eq!(state.candle_ttl("demo"), state.candles.ttl());
-        assert_eq!(state.candle_ttl("indmoney"), state.quotes.ttl());
+        assert_eq!(state.candle_ttl("yahoo"), state.candles.ttl());
         assert!(state.quotes.ttl() < state.candles.ttl());
+
+        // With a real provider in the chain, demo candles are short-lived.
+        let dir = std::env::temp_dir().join(format!("swing-state-test-{}", std::process::id()));
+        let dir = dir.to_string_lossy().into_owned();
+        let c = config_from(&[
+            "--api-token",
+            "test-token-0123456789",
+            "--data-providers",
+            "yahoo,nse,demo",
+            "--nse-eod-dir",
+            &dir,
+        ]);
+        let state = AppState::new(c.clone(), build_market(&c).unwrap());
+        assert_eq!(state.market.ids(), vec!["yahoo", "nse", "demo"]);
+        assert!(state.eod.is_some() && state.events.is_some());
+        assert_eq!(state.candle_ttl("demo"), state.quotes.ttl());
+        assert_eq!(state.candle_ttl("yahoo"), state.candles.ttl());
+        assert_eq!(state.candle_ttl("nse"), state.candles.ttl());
+        assert_eq!(state.scanner.provider(), "yahoo");
+    }
+
+    #[test]
+    fn places_nse_by_its_position_in_the_list() {
+        let dir = std::env::temp_dir().join(format!("swing-state-test2-{}", std::process::id()));
+        let dir = dir.to_string_lossy().into_owned();
+        let build = |providers: &str, extra: &[&str]| {
+            let mut args = vec![
+                "--api-token",
+                "test-token-0123456789",
+                "--data-providers",
+                providers,
+                "--nse-eod-dir",
+                &dir,
+                "--indmoney-token-file",
+                "/nonexistent/swing-trade/token.json",
+            ];
+            args.extend_from_slice(extra);
+            let c = config_from(&args);
+            build_market(&c).map(|m| AppState::new(c, m))
+        };
+        // INDmoney has no token here, so it is skipped and `nse` moves up.
+        if std::env::var(indmoney::oauth::ACCESS_TOKEN_ENV).is_err() {
+            let state = build("yahoo,indmoney,nse,demo", &[]).unwrap();
+            assert_eq!(state.market.ids(), vec!["yahoo", "nse", "demo"]);
+        }
+        assert_eq!(
+            build("nse,demo", &[]).unwrap().market.ids(),
+            vec!["nse", "demo"]
+        );
+        assert_eq!(build("nse", &[]).unwrap().market.ids(), vec!["nse"]);
+        // Switched off, `nse` is left out; alone it leaves nothing to run on.
+        let off = build("yahoo,nse,demo", &["--nse-eod", "false"]).unwrap();
+        assert_eq!(off.market.ids(), vec!["yahoo", "demo"]);
+        assert!(off.eod.is_none());
+        assert!(build("nse", &["--nse-eod", "false"]).is_err());
     }
 
     #[test]
@@ -297,7 +372,7 @@ mod tests {
             "--api-token",
             "test-token-0123456789",
             "--data-providers",
-            "demo,yahoo",
+            "demo,bloomberg",
         ]);
         assert!(build_market(&c).is_err());
     }

@@ -28,11 +28,13 @@ pub struct Config {
     #[arg(long, env = "ALLOW_NO_TOKEN", global = true)]
     pub allow_no_token: bool,
 
-    /// Data providers to try, in order (comma separated: indmoney, demo).
+    /// Data providers to try, in order (comma separated: yahoo, indmoney, nse, demo).
+    /// `yahoo` needs no account; `indmoney` needs `login indmoney`; `nse` serves
+    /// daily charts from the cached NSE files; `demo` is synthetic.
     #[arg(
         long,
         env = "DATA_PROVIDERS",
-        default_value = "indmoney,demo",
+        default_value = "yahoo,indmoney,nse,demo",
         global = true
     )]
     pub data_providers: String,
@@ -284,7 +286,7 @@ impl Config {
             ),
         }
         if self.providers().is_empty() {
-            bail!("DATA_PROVIDERS is empty (expected e.g. `indmoney,demo`)");
+            bail!("DATA_PROVIDERS is empty (expected e.g. `yahoo,indmoney,nse,demo`)");
         }
         params::parse_symbols(&self.watchlist).map_err(|e| anyhow::anyhow!("WATCHLIST: {e}"))?;
         params::check_capital(self.default_capital)

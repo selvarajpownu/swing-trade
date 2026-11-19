@@ -455,8 +455,9 @@ mod tests {
             assert!(gold["setup"]["quantity"].is_null());
         }
 
+        // US intraday is offered (Yahoo has it); demo generates it here.
         let resp = get("/v1/stocks/AAPL?market=us&interval=15m", Some(TOKEN)).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::OK);
         let resp = get("/v1/stocks?market=lse", Some(TOKEN)).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
 
