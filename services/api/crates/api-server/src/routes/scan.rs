@@ -74,7 +74,12 @@ pub async fn list(
     items.truncate(limit);
 
     Ok(Json(ScanResponse {
-        provider: state.scanner.provider(),
+        // `nse` when the scan read NSE's end-of-day files.
+        provider: if status.source.is_empty() {
+            state.scanner.provider()
+        } else {
+            status.source
+        },
         status: (&status).into(),
         total,
         items,

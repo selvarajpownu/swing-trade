@@ -155,6 +155,34 @@ pub struct Config {
         global = true
     )]
     pub candle_store_dir: PathBuf,
+
+    /// Read daily candles for scans from NSE's public end-of-day files
+    /// (one download per session for the whole market). Ignored with demo data.
+    #[arg(
+        long,
+        env = "NSE_EOD",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        global = true
+    )]
+    pub nse_eod: bool,
+
+    /// Directory for the cached NSE end-of-day files.
+    #[arg(long, env = "NSE_EOD_DIR", default_value = ".data/nse", global = true)]
+    pub nse_eod_dir: PathBuf,
+
+    /// Sessions of NSE history to keep (300 is about 14 months).
+    #[arg(long, env = "NSE_EOD_DAYS", default_value_t = 300, global = true)]
+    pub nse_eod_days: usize,
+
+    /// Swing page: minimum median 20-day turnover, in crore rupees.
+    #[arg(
+        long,
+        env = "SWING_MIN_TURNOVER_CR",
+        default_value_t = 10.0,
+        global = true
+    )]
+    pub swing_min_turnover_cr: f64,
 }
 
 impl fmt::Debug for Config {
@@ -183,6 +211,10 @@ impl fmt::Debug for Config {
             .field("scan_interval_mins", &self.scan_interval_mins)
             .field("scan_symbols_per_hour", &self.scan_symbols_per_hour)
             .field("candle_store_dir", &self.candle_store_dir)
+            .field("nse_eod", &self.nse_eod)
+            .field("nse_eod_dir", &self.nse_eod_dir)
+            .field("nse_eod_days", &self.nse_eod_days)
+            .field("swing_min_turnover_cr", &self.swing_min_turnover_cr)
             .finish()
     }
 }
@@ -275,6 +307,12 @@ impl Config {
         }
         if !(1..=10_000).contains(&self.indmoney_rate_per_hour) {
             bail!("INDMONEY_RATE_PER_HOUR must be between 1 and 10000");
+        }
+        if !(60..=2_000).contains(&self.nse_eod_days) {
+            bail!("NSE_EOD_DAYS must be between 60 and 2000");
+        }
+        if !(self.swing_min_turnover_cr.is_finite() && self.swing_min_turnover_cr >= 0.0) {
+            bail!("SWING_MIN_TURNOVER_CR must be zero or more");
         }
         if !(1..=3_600).contains(&self.scan_symbols_per_hour) {
             bail!("SCAN_SYMBOLS_PER_HOUR must be between 1 and 3600");

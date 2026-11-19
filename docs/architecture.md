@@ -99,9 +99,27 @@ Quality stays 0 until the CSV fundamentals import arrives (phase 3). Each setup 
 The INDmoney provider's rate limiter (`market-data/src/rate.rs`) is shared by the scanner and page requests, so a
 running scan slows pages down slightly rather than tripping INDmoney's limit.
 
+## NSE end-of-day data and the swing screen
+
+With `NSE_EOD` (default for real data) the scanner does not ask the provider for daily candles. `market-data/src/nse.rs`
+keeps `NSE_EOD_DAYS` sessions of NSE's public files:
+
+- **Full bhavcopy** (`sec_bhavdata_full_DDMMYYYY.csv`): OHLC, volume and delivery % for every stock. On a holiday the
+  archive re-serves the previous session's file, so the date inside the file decides; weekend special sessions
+  (Diwali Muhurat) exist, so every calendar day is tried. `.none` markers remember days without a session.
+- **Index closes** (`ind_close_all_DDMMYYYY.csv`): Nifty 50 for the market regime.
+- **Corporate actions** (NSE API, refreshed daily): bhavcopy prices are unadjusted, so bonuses and splits are applied
+  from this list when the ex-date price gap agrees with the listed ratio. NSE's own adjusted previous close catches
+  consolidations, demergers use the observed gap, and an unlisted gap beyond −28% / +45% is treated as an action.
+  Dividends are not adjusted. Adjusted closes matched INDmoney's candles on 140 of 140 stocks checked (Nov 2026).
+
+Each scan then runs `swing_core::screen` over the whole universe at once (relative-strength rank, breadth, sector
+strength, gates, breakout and pullback setups) and keeps the result for `GET /v1/swing`. A 503-stock scan takes
+about 2 seconds and spends no INDmoney budget; INDmoney stays in use for quotes, charts and news.
+
 ## State and storage
 
-- In-memory caches; restarting the API clears them. On disk in `.data/`: the INDmoney token and the scanner's daily-candle store.
+- In-memory caches; restarting the API clears them. On disk in `.data/`: the INDmoney token, the cached NSE files (`nse/`), the universe file and (when `NSE_EOD=false`) the scanner's daily-candle store.
 - Phase 3: Postgres + TimescaleDB for candle history, nightly Nifty 500 sync and fundamentals. The commented `db` service in `docker-compose.yml` shows where it goes.
 - Python (`services/quant`) is not created yet; it will be added only if a needed analytics library exists only in Python.
 

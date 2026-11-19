@@ -38,6 +38,8 @@ pub struct AppState {
     pub news: Arc<TtlCache<String, CachedNews>>,
     /// Google News RSS client for the Stock news page.
     pub google: Arc<GoogleNews>,
+    /// NSE end-of-day files, when enabled and the primary provider is real.
+    pub eod: Option<Arc<market_data::NseEod>>,
 }
 
 /// Cached provider headlines and the provider that served them.
@@ -56,7 +58,18 @@ impl AppState {
         );
         // Scans read only the primary provider; never a fallback.
         let primary = market.ids().first().copied().unwrap_or("demo");
+        // Demo mode stays offline: no NSE downloads.
+        let eod = (config.nse_eod && primary != "demo")
+            .then(|| market_data::NseEod::new(&config.nse_eod_dir, config.nse_eod_days))
+            .and_then(|built| match built {
+                Ok(eod) => Some(Arc::new(eod)),
+                Err(e) => {
+                    tracing::warn!(error = %e, "NSE end-of-day data disabled");
+                    None
+                }
+            });
         Self {
+            eod,
             news: Arc::new(TtlCache::new(NEWS_TTL, 1_000)),
             google: Arc::new(GoogleNews::new()),
             scanner: Arc::new(Scanner::new(primary)),

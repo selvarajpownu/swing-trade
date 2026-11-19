@@ -4,6 +4,7 @@ pub mod health;
 pub mod news;
 pub mod scan;
 pub mod stocks;
+pub mod swing;
 
 use std::time::Duration;
 
@@ -34,6 +35,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .route("/stocks/{symbol}/news", get(stocks::news))
         .route("/news", get(news::headlines))
         .route("/scan", get(scan::list))
+        .route("/swing", get(swing::list))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_token,
@@ -291,6 +293,113 @@ mod tests {
 
         let bad = call("/v1/scan?preset=nope").await.unwrap();
         assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn serves_the_swing_screen() {
+        let universe = "COFORGE,MCX,CAMS,IEX,ACE,AJAXENGG,ASKAUTOLTD,PERSISTENT,OFSS,BSE,                        INDRAMEDCO,TCS,INFY,HDFCBANK,ICICIBANK,SBIN,LT,ITC,TITAN,ASIANPAINT,                        MARUTI,SUNPHARMA,LUPIN,NESTLEIND,HAL,BEL,TRENT,DMART,POLYCAB,DIXON";
+        let config = crate::config::tests::config_from(&[
+            "--api-token",
+            TOKEN,
+            "--data-providers",
+            "demo",
+            "--universe",
+            universe,
+            "--swing-min-turnover-cr",
+            "0",
+        ]);
+        let universe = crate::universe::load(&config).unwrap();
+        let market = build_market(&config).unwrap();
+        let state = AppState::new(config, market);
+        assert!(state.eod.is_none(), "demo mode never downloads NSE files");
+        let app = router(state.clone()).unwrap();
+        let call = |uri: &str| {
+            let req = Request::builder()
+                .uri(uri)
+                .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                .body(Body::empty())
+                .unwrap();
+            app.clone().oneshot(req)
+        };
+
+        let before = json(call("/v1/swing").await.unwrap()).await;
+        assert_eq!(before["status"]["state"], "pending");
+        assert!(before["regime"].is_null() && before["source"].is_null());
+
+        crate::scan::run_once(&state, &universe).await;
+        let v = json(
+            call("/v1/swing?setup=leaders&gates=none&limit=500")
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(v["source"], "demo");
+        assert_eq!(v["status"]["state"], "ready");
+        assert!(v["status"]["days_cached"].is_null());
+        assert_eq!(v["as_of"].as_str().unwrap().len(), 10);
+        let regime = &v["regime"];
+        assert!(["normal", "caution", "defensive"].contains(&regime["state"].as_str().unwrap()));
+        assert!(regime["index"].is_null(), "demo has no index file");
+        assert_eq!(regime["universe"], 29);
+        let b50 = regime["breadth_50_pct"].as_f64().unwrap();
+        assert!((0.0..=100.0).contains(&b50));
+
+        // Leaders: every row passes the leader gate, strongest first.
+        let leaders = v["items"].as_array().unwrap();
+        assert_eq!(
+            v["counts"]["leaders"].as_u64().unwrap() as usize,
+            leaders.len()
+        );
+        let rs: Vec<u64> = leaders.iter().map(|i| i["rs"].as_u64().unwrap()).collect();
+        assert!(rs.windows(2).all(|w| w[0] >= w[1]), "{rs:?}");
+        for item in leaders {
+            assert_eq!(item["gates"]["leader"], true);
+            assert_ne!(item["symbol"], "INDRAMEDCO");
+            assert!(item["rs"].as_u64().unwrap() >= 70);
+            assert!(item["turnover_cr"].as_f64().unwrap() > 0.0);
+            assert_eq!(item["sparkline"].as_array().unwrap().len(), 30);
+        }
+
+        // Setup tabs: plans are internally consistent and follow capital and risk.
+        for tab in ["breakout", "pullback"] {
+            let uri = format!("/v1/swing?setup={tab}&gates=none&limit=500");
+            let v = json(call(&uri).await.unwrap()).await;
+            assert_eq!(v["counts"][tab], v["total"]);
+            for item in v["items"].as_array().unwrap() {
+                let s = &item["setup"];
+                assert_eq!(s["kind"], tab);
+                let (entry, stop) = (s["entry"].as_f64().unwrap(), s["stop"].as_f64().unwrap());
+                let risk = entry - stop;
+                assert!(risk > 0.0);
+                assert!((s["target_2r"].as_f64().unwrap() - (entry + 2.0 * risk)).abs() < 0.06);
+                assert!((s["target_3r"].as_f64().unwrap() - (entry + 3.0 * risk)).abs() < 0.06);
+                assert_eq!(
+                    s["quantity"].as_u64().unwrap(),
+                    (5_000.0 / risk).floor() as u64
+                );
+                assert_eq!(s["review_by"].as_str().unwrap().len(), 10);
+                assert!(s["score"].as_u64().unwrap() <= 100);
+            }
+        }
+
+        // Gates only ever narrow a list.
+        let loose = json(call("/v1/swing?setup=leaders&gates=none").await.unwrap()).await;
+        let strict = json(call("/v1/swing?setup=leaders").await.unwrap()).await;
+        assert!(strict["total"].as_u64() <= loose["total"].as_u64());
+
+        for bad in [
+            "/v1/swing?setup=nope",
+            "/v1/swing?gates=cheap",
+            "/v1/swing?limit=0",
+        ] {
+            assert_eq!(
+                call(bad).await.unwrap().status(),
+                StatusCode::BAD_REQUEST,
+                "{bad}"
+            );
+        }
+        let scan = json(call("/v1/scan").await.unwrap()).await;
+        assert_eq!(scan["provider"], "demo");
     }
 
     #[tokio::test]

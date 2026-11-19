@@ -15,6 +15,7 @@ pub mod routes;
 pub mod scan;
 pub mod state;
 pub mod store;
+pub mod swing;
 pub mod universe;
 
 use std::future::Future;

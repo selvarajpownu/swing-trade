@@ -191,3 +191,72 @@ Query (all optional):
   daily close. `industry` is `null` unless the universe file has an industry column.
 - `presets`: every preset firing on the latest bar; `setup` is the best one that passes the filters.
 - Indraprastha Medical (`INDRAMEDCO`) and any `SCAN_EXCLUDE` symbols are never scanned and are listed in `status.excluded`.
+
+When scans read NSE's end-of-day files (`NSE_EOD`, the default with real data), `provider` here is `nse`.
+
+## GET /v1/swing
+
+The Swing Stocks screen: market regime, sector strength and gated swing setups across the scan universe, computed
+by the background scan on daily bars. Like `/v1/scan` it only reads memory.
+
+Query (all optional):
+
+| Param | Default | Meaning |
+|---|---|---|
+| `setup` | `breakout` | Which list: `breakout`, `pullback`, or `leaders` (every stock passing the leader gate, strongest first). |
+| `gates` | all three | Comma-separated gates a stock must pass: `tradable`, `leader`, `sector`; `none` requires nothing. |
+| `limit` | `100` | Rows to return, 1-500. |
+| `capital`, `risk` | server defaults | Only `quantity` depends on them. |
+
+```json
+{
+  "source": "nse",
+  "as_of": "2026-11-19",
+  "status": { "state": "ready", "scan": "idle", "universe_size": 503, "failed": 4, "excluded": ["INDRAMEDCO"],
+              "days_cached": 300, "days_target": 300, "error": null },
+  "regime": { "state": "normal", "index": "Nifty 50", "index_close": 25514.3, "index_sma50": 23469.52,
+              "index_sma200": 23990.75, "breadth_50_pct": 58.1, "breadth_200_pct": 50.3, "universe": 497 },
+  "sectors": [ { "industry": "Healthcare", "members": 44, "ret_3m_pct": 0.7, "rank": 3, "strong": true } ],
+  "counts": { "breakout": 1, "pullback": 5, "leaders": 64 },
+  "total": 1,
+  "items": [
+    {
+      "symbol": "CRAFTSMAN", "name": "Craftsman Automation Ltd.", "exchange": "NSE",
+      "industry": "Automobile and Auto Components",
+      "price": 11930.0, "change": 585.0, "change_pct": 5.16, "volume": 37012, "bar_time": 1795046400,
+      "sparkline": [11010.0, 11345.0, 11930.0],
+      "turnover_cr": 44.0, "rs": 89, "ret_1m_pct": 6.2, "ret_3m_pct": 10.7, "ret_6m_pct": 31.0,
+      "below_high_pct": 2.3, "delivery_pct": 69.0, "delivery_avg20": 52.4,
+      "gates": { "tradable": true, "leader": true, "sector": true },
+      "setup": {
+        "kind": "breakout", "label": "Breakout", "score": 65,
+        "score_breakdown": { "rs": 26.7, "trend": 15.0, "setup": 12.1, "sector": 6.1, "delivery": 5.0, "quality": 0.0 },
+        "level": 11405.0, "extension_pct": 4.6, "volume_ratio": 2.0,
+        "entry": 12222.2, "stop": 11226.55, "risk_per_share": 995.65,
+        "target_2r": 14213.5, "target_3r": 15209.15, "quantity": 5,
+        "review_by": "2026-12-31",
+        "reasons": ["Closed 4.6% above its 20-day high on 2.0x average volume", "Base before the breakout was 9% deep"]
+      }
+    }
+  ]
+}
+```
+
+- `source`: `nse` when the scan read NSE's end-of-day files, otherwise the primary provider's id; `null` (with
+  `regime: null` and no items) before the first scan. `status.state` is `syncing` while NSE files download for the
+  first time, `pending` before any scan, then `ready`. `days_*` are `null` when NSE files are not used.
+- **Gates.** `tradable`: normal `EQ` series and median 20-day turnover ≥ `SWING_MIN_TURNOVER_CR`. `leader`: RS ≥ 70,
+  close > SMA 50 > rising SMA 200, within 25% of the 52-week high. `sector`: the industry is in the stronger half by
+  median 3-month return (`null` when the industry is unknown or has fewer than 3 members; `null` never excludes).
+- `rs`: average percentile rank (0-100) of the 3- and 6-month returns within the universe.
+- `regime.state`: `defensive` when the index is below its 200-day average; `caution` when it is below its 50-day
+  average or `breadth_50_pct` < 40; otherwise `normal`. Without index data (demo) only breadth is used.
+- **Setups** fire on the latest daily bar. `breakout`: close above the prior 20-day high on ≥ 1.5× the 20-day average
+  volume, base range ≤ 15%, close in the top third of the day's range, at most 5% above the level. `pullback`: 3-10%
+  off a swing high made 3-10 bars ago on below-average volume, low within 1% of EMA 20 or SMA 50, close above the
+  previous bar's high. For `leaders`, `setup` is the stock's best setup or `null`.
+- **Plan.** `entry` = setup bar high + 0.1%; `stop` below the structure (breakout bar low / level, or the dip low), at
+  least 1 ATR away; `target_2r` / `target_3r` = entry + 2× / 3× risk; `review_by` = setup bar + 42 days.
+- `score` (0-100) = RS 30 + trend 15 + setup 30 + sector 10 + delivery 5 + quality 10. `quality` stays 0 until
+  fundamentals are imported. All thresholds are starting values that have not been back-tested.
+
