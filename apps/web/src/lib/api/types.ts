@@ -210,7 +210,51 @@ export interface HeadlinesResponse {
 }
 
 /** GET /v1/swing */
-export type SwingTab = "breakout" | "pullback" | "leaders";
+export type SwingTab = "breakout" | "pullback" | "results_gap" | "leaders";
+
+export type CatalystKind =
+  | "results"
+  | "dividend"
+  | "bonus"
+  | "split"
+  | "buyback"
+  | "demerger"
+  | "rights"
+  | "fundraise"
+  | "order_win"
+  | "expansion"
+  | "deal"
+  | "credit_rating"
+  | "management"
+  | "legal"
+  | "exchange_query"
+  | "stake_change"
+  | "bulk_deal"
+  | "block_deal"
+  | "surveillance"
+  | "fno_ban";
+
+/** One dated NSE event for a stock. `risk` marks event risk or a trading restriction. */
+export interface Catalyst {
+  kind: CatalystKind;
+  tone: "positive" | "negative" | "neutral" | "risk";
+  /** YYYY-MM-DD */
+  date: string;
+  /** Days from the reference date (latest bar, or today); negative is past. */
+  days: number;
+  title: string;
+  detail: string | null;
+  url: string | null;
+}
+
+/** GET /v1/stocks/{symbol}/events */
+export interface StockEventsResponse {
+  symbol: string;
+  as_of: string;
+  /** False when NSE catalysts are not in use (demo data). */
+  available: boolean;
+  items: Catalyst[];
+}
 export type SwingGate = "tradable" | "leader" | "sector";
 export type RegimeState = "normal" | "caution" | "defensive";
 
@@ -225,6 +269,8 @@ export interface SwingStatus {
   days_cached: number | null;
   days_target: number | null;
   error: string | null;
+  /** Catalyst sources that could not be refreshed. */
+  catalyst_errors: string[];
 }
 
 export interface SwingRegime {
@@ -247,7 +293,7 @@ export interface SwingSector {
 }
 
 export interface SwingSetup {
-  kind: "breakout" | "pullback";
+  kind: "breakout" | "pullback" | "results_gap";
   label: string;
   /** 0-100 */
   score: number;
@@ -298,6 +344,8 @@ export interface SwingItem {
   delivery_avg20: number | null;
   gates: { tradable: boolean; leader: boolean; sector: boolean | null };
   setup: SwingSetup | null;
+  /** Events from 7 days before to 14 days after the latest bar; risks first. */
+  catalysts: Catalyst[];
 }
 
 export interface SwingResponse {

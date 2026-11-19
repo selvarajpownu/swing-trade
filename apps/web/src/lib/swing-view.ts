@@ -18,6 +18,12 @@ export const SWING_TABS: readonly { id: SwingTab; label: string; blurb: string }
       "Dipped 3–10% over 3–10 days on lighter volume, touched the 20/50-day average, then closed above the prior day's high.",
   },
   {
+    id: "results_gap",
+    label: "Results gaps",
+    blurb:
+      "Gapped up 4% or more on results with at least 3× volume, closed in the upper half, and still above that day's low (shown for three sessions).",
+  },
+  {
     id: "leaders",
     label: "Leaders",
     blurb: "Every stock passing the Leader gate, strongest first. A watchlist, not a setup.",

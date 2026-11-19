@@ -9,8 +9,13 @@ import {
   parseSymbol,
   type SearchParamsRecord,
 } from "@/lib/api/params";
-import { getStock, getStockNews } from "@/lib/api/server";
-import type { Market, StockDetailResponse, StockNewsResponse } from "@/lib/api/types";
+import { getStock, getStockEvents, getStockNews } from "@/lib/api/server";
+import type {
+  Market,
+  StockDetailResponse,
+  StockEventsResponse,
+  StockNewsResponse,
+} from "@/lib/api/types";
 import { MARKETS } from "@/lib/markets";
 
 import { StockView } from "@/components/stock/stock-view";
@@ -45,10 +50,11 @@ export async function StockDetailPage({
   const interval = info.intervals.includes(requested) ? requested : "1d";
   const plan = parsePlanParams((key) => firstParam(query[key]), info.defaultCapital);
 
-  // News is optional: a failure there never blocks the page.
-  const [stock, news] = await Promise.allSettled([
+  // News and NSE events are optional: a failure there never blocks the page.
+  const [stock, news, nseEvents] = await Promise.allSettled([
     getStock(symbol, { market, interval, capital: plan.capital, riskPct: plan.riskPct }),
     getStockNews(symbol, market),
+    market === "in" ? getStockEvents(symbol) : Promise.resolve(null),
   ]);
 
   let data: StockDetailResponse | null = null;
@@ -61,6 +67,9 @@ export async function StockDetailPage({
   }
   const newsData: StockNewsResponse | null = news.status === "fulfilled" ? news.value : null;
   const newsError = news.status === "rejected" ? describeApiError(news.reason) : null;
+  const events: StockEventsResponse | null =
+    nseEvents.status === "fulfilled" ? nseEvents.value : null;
+  const eventsError = nseEvents.status === "rejected" ? describeApiError(nseEvents.reason) : null;
 
   if (!data) {
     return (
@@ -89,6 +98,8 @@ export async function StockDetailPage({
       plan={plan}
       news={newsData}
       newsError={newsError}
+      events={events}
+      eventsError={eventsError}
     />
   );
 }

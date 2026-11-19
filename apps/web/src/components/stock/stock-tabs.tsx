@@ -3,10 +3,11 @@
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Building2, FileText, Newspaper, Sparkles, type LucideIcon } from "lucide-react";
 
-import type { StockNewsResponse } from "@/lib/api/types";
+import type { StockEventsResponse, StockNewsResponse } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 
 import { NewsList } from "@/components/news/news-list";
+import { CatalystList } from "@/components/swing/catalysts";
 import { Card } from "@/components/ui/card";
 
 interface TabDef {
@@ -27,7 +28,7 @@ const TABS: readonly TabDef[] = [
     id: "filings",
     label: "Filings",
     icon: FileText,
-    blurb: "Exchange filings and corporate announcements (results, board meetings, actions).",
+    blurb: "Results dates, corporate actions, tagged filings and bulk or block deals from NSE.",
   },
   {
     id: "ai",
@@ -48,10 +49,13 @@ interface StockTabsProps {
   /** INDmoney headlines; null when they could not be loaded. */
   news?: StockNewsResponse | null;
   newsError?: string | null;
+  /** NSE events; null when not loaded (other markets) or on error. */
+  events?: StockEventsResponse | null;
+  eventsError?: string | null;
 }
 
-/** Tabs below the chart. News is live; the rest arrives in phase 4 (no placeholder data). */
-export function StockTabs({ symbol, news, newsError }: StockTabsProps) {
+/** Tabs below the chart. News and Filings are live; the rest arrives in phase 4 (no placeholder data). */
+export function StockTabs({ symbol, news, newsError, events, eventsError }: StockTabsProps) {
   const [active, setActive] = useState(0);
   const baseId = useId();
   const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -130,6 +134,16 @@ export function StockTabs({ symbol, news, newsError }: StockTabsProps) {
         >
           <NewsPanel symbol={symbol} news={news} newsError={newsError} />
         </div>
+      ) : tab.id === "filings" && (events || eventsError) ? (
+        <div
+          role="tabpanel"
+          id={`${baseId}-panel-${tab.id}`}
+          aria-labelledby={`${baseId}-tab-${tab.id}`}
+          tabIndex={0}
+          className="focus-visible:outline-offset-[-2px]"
+        >
+          <FilingsPanel symbol={symbol} events={events} eventsError={eventsError} />
+        </div>
       ) : (
         <div
           role="tabpanel"
@@ -150,6 +164,31 @@ export function StockTabs({ symbol, news, newsError }: StockTabsProps) {
       )}
     </Card>
   );
+}
+
+function FilingsPanel({
+  symbol,
+  events,
+  eventsError,
+}: Pick<StockTabsProps, "symbol" | "events" | "eventsError">) {
+  if (events && events.items.length > 0) {
+    return (
+      <>
+        <CatalystList catalysts={events.items} />
+        <p className="border-t border-line px-4 py-3 text-xs text-subtle sm:px-5">
+          From NSE: board meetings, corporate actions, tagged announcements, bulk and block deals,
+          surveillance lists. Covers the last 7 days and the next 14. Colours are a rule of thumb,
+          not a judgement on the filing; open the filing to read it.
+        </p>
+      </>
+    );
+  }
+  const message = eventsError
+    ? `Could not load NSE events: ${eventsError}`
+    : events && !events.available
+      ? "NSE events are not available with demo data."
+      : `No NSE events for ${symbol} in the last 7 days or the next 14.`;
+  return <p className="px-6 py-10 text-center text-sm text-muted">{message}</p>;
 }
 
 function NewsPanel({ symbol, news, newsError }: StockTabsProps) {

@@ -8,7 +8,12 @@ import { fetchStock, stockUrl } from "@/lib/api/client";
 import { MARKETS } from "@/lib/markets";
 import { describeApiError } from "@/lib/api/errors";
 import type { PlanParams } from "@/lib/api/params";
-import type { Interval, StockDetailResponse, StockNewsResponse } from "@/lib/api/types";
+import type {
+  Interval,
+  StockDetailResponse,
+  StockEventsResponse,
+  StockNewsResponse,
+} from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { usePolling } from "@/hooks/use-polling";
 
@@ -33,6 +38,9 @@ interface StockViewProps {
   /** INDmoney headlines, loaded once on the server. */
   news?: StockNewsResponse | null;
   newsError?: string | null;
+  /** NSE events (NSE stocks only), loaded once on the server. */
+  events?: StockEventsResponse | null;
+  eventsError?: string | null;
 }
 
 const INTERVAL_LABEL: Record<Interval, string> = {
@@ -49,6 +57,8 @@ export function StockView({
   plan,
   news,
   newsError,
+  events,
+  eventsError,
 }: StockViewProps) {
   const market = initialData.market ?? "in";
   const currency = initialData.currency ?? "INR";
@@ -136,7 +146,13 @@ export function StockView({
         </aside>
 
         <div className="min-w-0 self-start xl:col-start-1 xl:row-start-2">
-          <StockTabs symbol={symbol} news={news} newsError={newsError} />
+          <StockTabs
+            symbol={symbol}
+            news={news}
+            newsError={newsError}
+            events={events}
+            eventsError={eventsError}
+          />
         </div>
       </div>
     </div>

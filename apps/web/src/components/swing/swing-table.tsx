@@ -12,6 +12,7 @@ import { Badge } from "@/components/ui/badge";
 import { PriceChange } from "@/components/ui/price-change";
 import { SymbolAvatar } from "@/components/ui/symbol-avatar";
 
+import { CatalystBadges } from "./catalysts";
 import { formatBarDate } from "./regime-banner";
 
 const TH = "px-3 py-3 text-xs font-medium whitespace-nowrap text-muted";
@@ -33,14 +34,21 @@ function Flags({ item }: { item: SwingItem }) {
   return (
     <span className="flex flex-wrap gap-1">
       {item.setup ? (
-        <Badge tone={item.setup.kind === "breakout" ? "up" : "accent"}>{item.setup.label}</Badge>
+        <Badge tone={item.setup.kind === "pullback" ? "accent" : "up"}>{item.setup.label}</Badge>
       ) : null}
       {jump ? (
         <Badge tone="up" title="Delivery share at least 20% above its 20-day average on an up day">
           Delivery ↑
         </Badge>
       ) : null}
-      {!item.gates.tradable ? <Badge tone="warn">Thin / restricted</Badge> : null}
+      {!item.gates.tradable ? (
+        <Badge
+          tone="warn"
+          title="Fails the Tradable gate: low turnover, a restricted series, or on a surveillance list"
+        >
+          Thin / restricted
+        </Badge>
+      ) : null}
       {!item.gates.leader ? <Badge tone="muted">Not a leader</Badge> : null}
       {item.gates.sector === false ? <Badge tone="muted">Weak sector</Badge> : null}
     </span>
@@ -82,8 +90,8 @@ export function SwingTable({ rows, plan }: SwingTableProps) {
               <th scope="col" className={cn(TH, "text-right")} title="Delivery share of volume">
                 Delivery
               </th>
-              <th scope="col" className={TH}>
-                Setup
+              <th scope="col" className={TH} title="Setup, flags and recent or upcoming events">
+                Setup / events
               </th>
               <th scope="col" className={TH}>
                 Score
@@ -167,6 +175,11 @@ export function SwingTable({ rows, plan }: SwingTableProps) {
                         {s.reasons[0]}
                       </span>
                     ) : null}
+                    {item.catalysts.length > 0 ? (
+                      <span className="mt-1.5 block">
+                        <CatalystBadges catalysts={item.catalysts} />
+                      </span>
+                    ) : null}
                   </td>
                   <td className={TD}>
                     {s ? <ScoreBar score={s.score} /> : <span className="text-subtle">—</span>}
@@ -230,8 +243,9 @@ export function SwingTable({ rows, plan }: SwingTableProps) {
                     className="text-xs"
                   />
                 </div>
-                <div className="mt-2">
+                <div className="mt-2 space-y-1.5">
                   <Flags item={item} />
+                  <CatalystBadges catalysts={item.catalysts} max={3} />
                 </div>
                 {s ? (
                   <p className="mt-2 text-xs text-muted tabular-nums">

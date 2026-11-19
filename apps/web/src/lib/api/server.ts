@@ -6,6 +6,7 @@ import type {
   Interval,
   HealthResponse,
   Market,
+  StockEventsResponse,
   StockNewsResponse,
   SwingResponse,
   SwingTab,
@@ -232,6 +233,15 @@ export async function getScan(params: GetScanParams = {}): Promise<ScanResponse>
   return data;
 }
 
+/** GET /v1/stocks/{symbol}/events (NSE results dates, filings, deals; NSE stocks only). */
+export async function getStockEvents(symbol: string): Promise<StockEventsResponse> {
+  const data = await request<StockEventsResponse>(
+    `/v1/stocks/${encodeURIComponent(symbol)}/events`,
+  );
+  assertShape(Array.isArray(data.items), "`items`");
+  return data;
+}
+
 export interface GetSwingParams {
   setup?: SwingTab;
   /** Comma-separated gates to require, or `none`; omit for all three. */
@@ -255,7 +265,11 @@ export async function getSwing(params: GetSwingParams = {}): Promise<SwingRespon
   });
   assertShape(Array.isArray(data.items), "`items`");
   assertShape(typeof data.status === "object" && data.status !== null, "`status`");
-  return data;
+  // An API from before catalysts existed sends no `catalysts`; treat that as none.
+  return {
+    ...data,
+    items: data.items.map((item) => ({ ...item, catalysts: item.catalysts ?? [] })),
+  };
 }
 
 /** GET /health (no auth). */
