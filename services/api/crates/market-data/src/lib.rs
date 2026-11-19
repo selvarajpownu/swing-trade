@@ -11,6 +11,7 @@ pub mod indmoney;
 pub mod mcp;
 mod names;
 pub mod nse;
+pub mod nse_events;
 pub mod rate;
 mod types;
 
@@ -20,6 +21,7 @@ pub use fallback::FallbackProvider;
 pub use indmoney::IndmoneyProvider;
 pub use mcp::{StaticToken, TokenSource};
 pub use nse::{EodData, EodSeries, NseEod};
+pub use nse_events::{Catalyst, CatalystKind, EventData, NseEvents, Tone};
 pub use rate::RateLimiter;
 pub use types::{Interval, Market, NewsItem, ParseIntervalError, Quote};
 
