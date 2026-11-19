@@ -36,6 +36,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .route("/news", get(news::headlines))
         .route("/scan", get(scan::list))
         .route("/swing", get(swing::list))
+        .route("/stocks/{symbol}/events", get(swing::events))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_token,
@@ -358,7 +359,20 @@ mod tests {
             assert!(item["rs"].as_u64().unwrap() >= 70);
             assert!(item["turnover_cr"].as_f64().unwrap() > 0.0);
             assert_eq!(item["sparkline"].as_array().unwrap().len(), 30);
+            assert_eq!(
+                item["catalysts"],
+                serde_json::json!([]),
+                "demo has no catalysts"
+            );
         }
+        assert_eq!(
+            v["counts"]["results_gap"], 0,
+            "no results dates without NSE feeds"
+        );
+        let events = json(call("/v1/stocks/ace/events").await.unwrap()).await;
+        assert_eq!(events["symbol"], "ACE");
+        assert_eq!(events["available"], false);
+        assert_eq!(events["items"], serde_json::json!([]));
 
         // Setup tabs: plans are internally consistent and follow capital and risk.
         for tab in ["breakout", "pullback"] {

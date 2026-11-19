@@ -148,6 +148,18 @@ pub async fn run_forever(state: AppState, universe: Universe) {
                 Err(e) => tracing::warn!(error = %e, "NSE end-of-day sync failed"),
             }
         }
+        if let Some(events) = &state.events {
+            let data = events.refresh().await;
+            tracing::info!(
+                symbols = data.catalysts.len(),
+                results_dates = data.results.len(),
+                surveillance = data.surveillance.len(),
+                "NSE catalysts refreshed"
+            );
+            for problem in &data.errors {
+                tracing::warn!(%problem, "NSE catalyst source not refreshed");
+            }
+        }
         run_once(&state, &universe).await;
         if every == 0 {
             return;
@@ -184,6 +196,10 @@ pub async fn run_once(state: &AppState, universe: &Universe) {
         provider.id()
     };
     let index_closes = eod.as_ref().and_then(|d| d.index_closes(swing::INDEX));
+    let events = match &state.events {
+        Some(events) => Some(events.data().await),
+        None => None,
+    };
     let fetcher = Fetcher {
         eod,
         provider: provider.clone(),
@@ -228,6 +244,7 @@ pub async fn run_once(state: &AppState, universe: &Universe) {
         &collected,
         &names,
         index_closes.as_deref(),
+        events.as_deref(),
         &screen_params,
     );
 

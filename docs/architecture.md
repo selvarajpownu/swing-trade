@@ -113,6 +113,15 @@ keeps `NSE_EOD_DAYS` sessions of NSE's public files:
   consolidations, demergers use the observed gap, and an unlisted gap beyond −28% / +45% is treated as an action.
   Dividends are not adjusted. Adjusted closes matched INDmoney's candles on 140 of 140 stocks checked (Nov 2026).
 
+**Catalysts** (`market-data/src/nse_events.rs`, refreshed before each scan, each source on its own interval of 1 to
+12 hours): board meetings (results dates), corporate actions (ex-dates), announcements (only the categories NSE tags
+as order wins, capacity, acquisitions, credit ratings, resignations, regulatory or legal matters, exchange queries,
+stake disclosures and fund raising; fetched incrementally), bulk and block deals, the ASM and GSM surveillance lists
+and the F&O ban list. A failing source keeps its last saved copy and is reported in `status.catalyst_errors`.
+Results dates feed the results-gap setup, surveillance fails the tradable gate, and every stock carries its events
+for the swing table and the stock page's Filings tab (`GET /v1/stocks/{symbol}/events`). NSE's insider-trading API
+returned nothing when probed, so insider trades are not included.
+
 Each scan then runs `swing_core::screen` over the whole universe at once (relative-strength rank, breadth, sector
 strength, gates, breakout and pullback setups) and keeps the result for `GET /v1/swing`. A 503-stock scan takes
 about 2 seconds and spends no INDmoney budget; INDmoney stays in use for quotes, charts and news.

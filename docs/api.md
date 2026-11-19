@@ -203,7 +203,7 @@ Query (all optional):
 
 | Param | Default | Meaning |
 |---|---|---|
-| `setup` | `breakout` | Which list: `breakout`, `pullback`, or `leaders` (every stock passing the leader gate, strongest first). |
+| `setup` | `breakout` | Which list: `breakout`, `pullback`, `results_gap`, or `leaders` (every stock passing the leader gate, strongest first). |
 | `gates` | all three | Comma-separated gates a stock must pass: `tradable`, `leader`, `sector`; `none` requires nothing. |
 | `limit` | `100` | Rows to return, 1-500. |
 | `capital`, `risk` | server defaults | Only `quantity` depends on them. |
@@ -213,11 +213,11 @@ Query (all optional):
   "source": "nse",
   "as_of": "2026-11-19",
   "status": { "state": "ready", "scan": "idle", "universe_size": 503, "failed": 4, "excluded": ["INDRAMEDCO"],
-              "days_cached": 300, "days_target": 300, "error": null },
+              "days_cached": 300, "days_target": 300, "error": null, "catalyst_errors": [] },
   "regime": { "state": "normal", "index": "Nifty 50", "index_close": 25514.3, "index_sma50": 23469.52,
               "index_sma200": 23990.75, "breadth_50_pct": 58.1, "breadth_200_pct": 50.3, "universe": 497 },
   "sectors": [ { "industry": "Healthcare", "members": 44, "ret_3m_pct": 0.7, "rank": 3, "strong": true } ],
-  "counts": { "breakout": 1, "pullback": 5, "leaders": 64 },
+  "counts": { "breakout": 1, "pullback": 4, "results_gap": 0, "leaders": 61 },
   "total": 1,
   "items": [
     {
@@ -236,7 +236,12 @@ Query (all optional):
         "target_2r": 14213.5, "target_3r": 15209.15, "quantity": 5,
         "review_by": "2026-12-31",
         "reasons": ["Closed 4.6% above its 20-day high on 2.0x average volume", "Base before the breakout was 9% deep"]
-      }
+      },
+      "catalysts": [
+        { "kind": "results", "tone": "risk", "date": "2026-11-25", "days": 6, "title": "Results",
+          "detail": "To consider and approve the financial results for the period ended September 30, 2026",
+          "url": "https://nsearchives.nseindia.in/corporate/..." }
+      ]
     }
   ]
 }
@@ -255,8 +260,38 @@ Query (all optional):
   volume, base range ≤ 15%, close in the top third of the day's range, at most 5% above the level. `pullback`: 3-10%
   off a swing high made 3-10 bars ago on below-average volume, low within 1% of EMA 20 or SMA 50, close above the
   previous bar's high. For `leaders`, `setup` is the stock's best setup or `null`.
+- `results_gap` (shown for three sessions): on the session of a results board meeting or the next one, an opening gap
+  of ≥ 4% on ≥ 3× the 20-day average volume that closed in the upper half of its range, with no close below that
+  day's low since and the latest close at most 5% above its high. Entry is above the highest high since the gap, the
+  stop below the gap-day low.
+- **Catalysts** (`catalysts`, from NSE's feeds; empty without them): events dated from 7 days before to 14 days after
+  the latest bar, `risk` tone first, then newest first. `days` counts from the latest bar (negative is past). `kind` is
+  one of `results`, `dividend`, `bonus`, `split`, `buyback`, `demerger`, `rights`, `fundraise`, `order_win`,
+  `expansion`, `deal`, `credit_rating`, `management`, `legal`, `exchange_query`, `stake_change`, `bulk_deal`,
+  `block_deal`, `surveillance`, `fno_ban`. `tone` (`positive`, `negative`, `neutral`, `risk`) is a rule of thumb for
+  colouring: upcoming results, surveillance and F&O ban are `risk`; resignations, auditor changes and regulatory or
+  legal filings are `negative`; order wins, capacity additions and buybacks are `positive`. A stock on an ASM or GSM
+  surveillance list fails the `tradable` gate. `status.catalyst_errors` lists sources that could not be refreshed.
 - **Plan.** `entry` = setup bar high + 0.1%; `stop` below the structure (breakout bar low / level, or the dip low), at
   least 1 ATR away; `target_2r` / `target_3r` = entry + 2× / 3× risk; `review_by` = setup bar + 42 days.
 - `score` (0-100) = RS 30 + trend 15 + setup 30 + sector 10 + delivery 5 + quality 10. `quality` stays 0 until
   fundamentals are imported. All thresholds are starting values that have not been back-tested.
+
+## GET /v1/stocks/{symbol}/events
+
+NSE catalysts for one NSE stock: the same objects as `catalysts` above, for the last 7 days and the next 14, with
+`days` counted from today (IST). Reads memory only.
+
+```json
+{
+  "symbol": "ADANIPORTS", "as_of": "2026-11-19", "available": true,
+  "items": [
+    { "kind": "credit_rating", "tone": "neutral", "date": "2026-11-17", "days": -2, "title": "Credit rating",
+      "detail": "Adani Ports and Special Economic Zone Limited has informed the Exchange about Credit Rating",
+      "url": "https://nsearchives.nseindia.in/corporate/..." }
+  ]
+}
+```
+
+- `available` is `false` (and `items` empty) when NSE catalysts are not in use: demo data, or `NSE_EOD=false`.
 

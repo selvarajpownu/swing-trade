@@ -3,10 +3,11 @@
 //! Reads the snapshot the background scan keeps in memory; never calls a
 //! data provider. Response shapes are documented in `docs/api.md`.
 
-use axum::extract::rejection::QueryRejection;
-use axum::extract::{Query, State};
+use axum::extract::rejection::{PathRejection, QueryRejection};
+use axum::extract::{Path, Query, State};
 use axum::Json;
-use chrono::{DateTime, Duration};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use market_data::Catalyst;
 use serde::{Deserialize, Serialize};
 use swing_core::screen::{Gates, SwingKind, SwingSetup};
 
@@ -15,7 +16,7 @@ use crate::error::ApiError;
 use crate::params;
 use crate::scan::ScanPhase;
 use crate::state::AppState;
-use crate::swing::{SwingRow, SwingSnapshot};
+use crate::swing::{self, SwingRow, SwingSnapshot};
 
 const DEFAULT_LIMIT: usize = 100;
 const MAX_LIMIT: usize = 500;
@@ -84,6 +85,8 @@ pub struct StatusDto {
     pub days_cached: Option<usize>,
     pub days_target: Option<usize>,
     pub error: Option<String>,
+    /// Catalyst sources that could not be refreshed (their last saved copy is used).
+    pub catalyst_errors: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +117,7 @@ pub struct SectorDto {
 pub struct CountsDto {
     pub breakout: usize,
     pub pullback: usize,
+    pub results_gap: usize,
     pub leaders: usize,
 }
 
@@ -149,6 +153,49 @@ pub struct SwingItem {
     pub delivery_avg20: Option<f64>,
     pub gates: GatesDto,
     pub setup: Option<SwingSetupDto>,
+    /// Events from 7 days before to 14 days after the latest bar: risks first, then newest first.
+    pub catalysts: Vec<CatalystDto>,
+}
+
+/// One dated event for a stock.
+#[derive(Debug, Serialize)]
+pub struct CatalystDto {
+    /// e.g. `results`, `dividend`, `order_win`, `bulk_deal`, `surveillance`.
+    pub kind: &'static str,
+    /// `positive`, `negative`, `neutral` or `risk`.
+    pub tone: &'static str,
+    /// `YYYY-MM-DD`.
+    pub date: String,
+    /// Days from the reference date; negative is past.
+    pub days: i64,
+    pub title: String,
+    pub detail: Option<String>,
+    pub url: Option<String>,
+}
+
+impl CatalystDto {
+    pub fn new(c: &Catalyst, reference: NaiveDate) -> Self {
+        Self {
+            kind: c.kind.as_str(),
+            tone: c.tone.as_str(),
+            date: c.date.format("%Y-%m-%d").to_string(),
+            days: (c.date - reference).num_days(),
+            title: c.title.clone(),
+            detail: c.detail.clone(),
+            url: c.url.clone(),
+        }
+    }
+}
+
+/// `GET /v1/stocks/{symbol}/events`.
+#[derive(Debug, Serialize)]
+pub struct EventsResponse {
+    pub symbol: String,
+    /// The date `days` is counted from (today in IST), `YYYY-MM-DD`.
+    pub as_of: String,
+    /// False when NSE catalysts are not in use (demo data, or `NSE_EOD=false`).
+    pub available: bool,
+    pub items: Vec<CatalystDto>,
 }
 
 #[derive(Debug, Serialize)]
@@ -218,6 +265,10 @@ pub async fn list(
         days_cached: eod.as_ref().map(|s| s.days_cached),
         days_target: eod.as_ref().map(|s| s.days_target),
         error: eod.and_then(|s| s.error),
+        catalyst_errors: snapshot
+            .as_ref()
+            .map(|s| s.catalyst_errors.clone())
+            .unwrap_or_default(),
     };
 
     let Some(snap) = snapshot else {
@@ -236,6 +287,7 @@ pub async fn list(
     let counts = CountsDto {
         breakout: select(&snap, Tab::Setup(SwingKind::Breakout), required).len(),
         pullback: select(&snap, Tab::Setup(SwingKind::Pullback), required).len(),
+        results_gap: select(&snap, Tab::Setup(SwingKind::ResultsGap), required).len(),
         leaders: select(&snap, Tab::Leaders, required).len(),
     };
     let chosen = select(&snap, tab, required);
@@ -273,6 +325,31 @@ pub async fn list(
             .collect(),
         counts,
         total,
+        items,
+    }))
+}
+
+/// Recent and upcoming NSE events for one stock (results dates, corporate
+/// actions, tagged filings, bulk and block deals, surveillance).
+pub async fn events(
+    State(state): State<AppState>,
+    path: Result<Path<String>, PathRejection>,
+) -> Result<Json<EventsResponse>, ApiError> {
+    let Path(raw) = path.map_err(|e| ApiError::BadRequest(e.body_text()))?;
+    let symbol = params::normalize_symbol(&raw)?;
+    // Today in IST.
+    let today = (Utc::now() + Duration::minutes(330)).date_naive();
+    let items = match &state.events {
+        Some(events) => swing::catalysts_around(&*events.data().await, &symbol, today)
+            .iter()
+            .map(|c| CatalystDto::new(c, today))
+            .collect(),
+        None => Vec::new(),
+    };
+    Ok(Json(EventsResponse {
+        symbol,
+        as_of: today.format("%Y-%m-%d").to_string(),
+        available: state.events.is_some(),
         items,
     }))
 }
@@ -343,6 +420,14 @@ fn item(r: &SwingRow, setup: Option<&SwingSetup>, capital: f64, risk: f64) -> Sw
             sector: row.gates.sector,
         },
         setup: setup.map(|s| setup_dto(s, row.bar_time, capital, risk)),
+        catalysts: match swing::bar_date(row.bar_time) {
+            Some(day) => r
+                .catalysts
+                .iter()
+                .map(|c| CatalystDto::new(c, day))
+                .collect(),
+            None => Vec::new(),
+        },
     }
 }
 
@@ -397,9 +482,10 @@ fn parse_tab(raw: Option<&str>) -> Result<Tab, ApiError> {
     match raw.map(str::trim) {
         None | Some("") | Some("breakout") => Ok(Tab::Setup(SwingKind::Breakout)),
         Some("pullback") => Ok(Tab::Setup(SwingKind::Pullback)),
+        Some("results_gap") => Ok(Tab::Setup(SwingKind::ResultsGap)),
         Some("leaders") => Ok(Tab::Leaders),
         Some(other) => Err(ApiError::BadRequest(format!(
-            "unknown setup `{other}` (expected breakout, pullback or leaders)"
+            "unknown setup `{other}` (expected breakout, pullback, results_gap or leaders)"
         ))),
     }
 }
@@ -459,6 +545,10 @@ mod tests {
             Tab::Setup(SwingKind::Pullback)
         );
         assert_eq!(parse_tab(Some("leaders")).unwrap(), Tab::Leaders);
+        assert_eq!(
+            parse_tab(Some("results_gap")).unwrap(),
+            Tab::Setup(SwingKind::ResultsGap)
+        );
         assert!(parse_tab(Some("oversold")).is_err());
 
         let all = parse_gates(None).unwrap();

@@ -40,6 +40,8 @@ pub struct AppState {
     pub google: Arc<GoogleNews>,
     /// NSE end-of-day files, when enabled and the primary provider is real.
     pub eod: Option<Arc<market_data::NseEod>>,
+    /// NSE catalysts (results dates, filings, deals); enabled with `eod`.
+    pub events: Option<Arc<market_data::NseEvents>>,
 }
 
 /// Cached provider headlines and the provider that served them.
@@ -68,8 +70,18 @@ impl AppState {
                     None
                 }
             });
+        let events =
+            eod.as_ref()
+                .and_then(|_| match market_data::NseEvents::new(&config.nse_eod_dir) {
+                    Ok(events) => Some(Arc::new(events)),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "NSE catalysts disabled");
+                        None
+                    }
+                });
         Self {
             eod,
+            events,
             news: Arc::new(TtlCache::new(NEWS_TTL, 1_000)),
             google: Arc::new(GoogleNews::new()),
             scanner: Arc::new(Scanner::new(primary)),

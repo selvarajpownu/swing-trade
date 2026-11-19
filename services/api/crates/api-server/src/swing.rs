@@ -5,6 +5,9 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Duration, NaiveDate};
+use market_data::{Catalyst, EventData, Tone};
+
 use swing_core::screen::{
     self, Breadth, Regime, ScreenInput, ScreenParams, ScreenRow, SectorStrength,
 };
@@ -27,6 +30,8 @@ pub struct SwingRow {
     pub name: String,
     pub exchange: String,
     pub sparkline: Vec<f64>,
+    /// Recent and upcoming events, risks first, then newest first.
+    pub catalysts: Vec<Catalyst>,
 }
 
 /// The swing screen of one completed scan.
@@ -44,6 +49,33 @@ pub struct SwingSnapshot {
     pub rows: Vec<SwingRow>,
     /// Stocks left out because their data was stale.
     pub stale: usize,
+    /// Catalyst sources that could not be refreshed for this scan.
+    pub catalyst_errors: Vec<String>,
+}
+
+/// Catalysts are shown from this many days before the latest bar...
+pub const CATALYST_BACK_DAYS: i64 = 7;
+/// ...to this many days after it.
+pub const CATALYST_AHEAD_DAYS: i64 = 14;
+
+/// Session date of a daily bar (bars are stamped 00:00 UTC of their date).
+pub fn bar_date(ts: i64) -> Option<NaiveDate> {
+    DateTime::from_timestamp(ts, 0).map(|d| d.date_naive())
+}
+
+/// Events of `symbol` around `day`: risks first, then newest first.
+pub fn catalysts_around(events: &EventData, symbol: &str, day: NaiveDate) -> Vec<Catalyst> {
+    let mut list = events.window(
+        symbol,
+        day - Duration::days(CATALYST_BACK_DAYS),
+        day + Duration::days(CATALYST_AHEAD_DAYS),
+    );
+    list.sort_by(|a, b| {
+        (b.tone == Tone::Risk)
+            .cmp(&(a.tone == Tone::Risk))
+            .then(b.date.cmp(&a.date))
+    });
+    list
 }
 
 /// Screen thresholds from the server configuration.
@@ -63,8 +95,26 @@ pub fn build(
     collected: &[Daily],
     names: &HashMap<String, (String, String)>,
     index_closes: Option<&[f64]>,
+    events: Option<&EventData>,
     params: &ScreenParams,
 ) -> SwingSnapshot {
+    // Results-meeting dates on the candles' clock (00:00 UTC of the date).
+    let results: HashMap<&str, Vec<i64>> = events
+        .map(|e| {
+            e.results
+                .iter()
+                .map(|(symbol, dates)| {
+                    let stamps = dates
+                        .iter()
+                        .filter_map(|d| d.and_hms_opt(0, 0, 0))
+                        .map(|d| d.and_utc().timestamp())
+                        .collect();
+                    (symbol.as_str(), stamps)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let watched = |symbol: &str| events.is_some_and(|e| e.surveillance.contains_key(symbol));
     let industry: HashMap<&str, Option<&str>> = entries
         .iter()
         .map(|e| (e.symbol.as_str(), e.industry.as_deref()))
@@ -84,7 +134,9 @@ pub fn build(
             industry: industry.get(d.symbol.as_str()).copied().flatten(),
             candles: &d.candles,
             delivery: &d.delivery,
-            main_series: d.main_series,
+            // A stock on a surveillance list is not freely tradable either.
+            main_series: d.main_series && !watched(&d.symbol),
+            results: results.get(d.symbol.as_str()).map_or(&[], Vec::as_slice),
         })
         .collect();
     let stale = collected.len() - inputs.len();
@@ -104,11 +156,16 @@ pub fn build(
                 .get(row.symbol.as_str())
                 .map(|d| dto::sparkline(&d.candles))
                 .unwrap_or_default();
+            let catalysts = match (events, bar_date(row.bar_time)) {
+                (Some(e), Some(day)) => catalysts_around(e, &row.symbol, day),
+                _ => Vec::new(),
+            };
             SwingRow {
                 row,
                 name,
                 exchange,
                 sparkline,
+                catalysts,
             }
         })
         .collect();
@@ -122,5 +179,6 @@ pub fn build(
         sectors: screened.sectors,
         rows,
         stale,
+        catalyst_errors: events.map(|e| e.errors.clone()).unwrap_or_default(),
     }
 }
