@@ -60,8 +60,10 @@ Next: see docs/roadmap.md Phase 2 "Next".
 `api-server/src/swing.rs`). Scans read NSE's public end-of-day files (`market-data/src/nse.rs`, `NSE_EOD`), so a
 503-stock scan takes ~2 s and uses no INDmoney budget. Design came from a ChatGPT playbook the owner shared; the
 owner approved: five gates (tradable, market, leader, sector, quality), breakout / pullback / results-gap setups,
-catalysts from NSE feeds. Built so far: gates 1-4, breakout, pullback. Not built: quality gate (needs Screener CSV),
-catalyst feeds and results-gap setup, back-test, open positions.
+catalysts from NSE feeds. Built so far: gates 1-4, breakout, pullback, results-gap, catalyst feeds
+(`market-data/src/nse_events.rs`: badges on `/swing`, Filings tab via `GET /v1/stocks/{symbol}/events`; surveillance
+fails the tradable gate). Not built: quality gate (needs Screener CSV), back-test, open positions, insider trades,
+macro calendar.
 
 Phase 1 (list + chart MVP) **builds, passes all checks and runs end to end on real INDmoney data** (Windows 11,
 Rust 1.90, Node 24).

@@ -31,9 +31,11 @@ Next:
 - Done 19 Nov: **Swing Stocks IN** page (`/swing`, `GET /v1/swing`) on NSE's free end-of-day files: market regime,
   relative-strength leaders, sector strength, breakout and pullback setups with 2R / 3R plans. The scan now takes
   seconds and no longer uses INDmoney.
-- Swing Stocks, next steps: catalyst feeds (results dates, corporate actions, bulk/block deals, insider trades,
-  surveillance list) with badges and a results-gap setup; a back-test of every preset on the NSE history; a quality
-  gate from Screener CSV exports; manual open positions for portfolio limits.
+- Done 19 Nov: catalysts from NSE feeds (results dates, corporate actions, tagged filings, bulk/block deals,
+  surveillance, F&O ban) as badges on the swing table and a Filings tab on stock pages, plus the results-gap setup.
+- Swing Stocks, next steps: a back-test of every preset on the NSE history; a quality gate from Screener CSV exports;
+  manual open positions for portfolio limits; insider trades (NSE's API returned nothing) and a macro calendar
+  (RBI policy, Budget, Fed) are still missing from the catalysts.
 - Google Finance-style range tabs (1D / 5D / 1M / 6M / YTD / 1Y) on the chart.
 - Scanner for US and MCX (today it scans NSE only).
 
