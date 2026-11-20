@@ -8,6 +8,22 @@ Browser ──> Vercel (apps/web) ──HTTPS + Bearer token──> API host (se
 
 The web app on Vercel must reach the API over **HTTPS** with the `API_TOKEN`. The API itself never needs to be reachable from browsers.
 
+## Current setup: your PC, private access with Tailscale (chosen 20 Nov 2026)
+
+The app runs on the owner's Windows PC and is opened from the phone over Tailscale, a private network between your
+own devices. Nothing is public, so the missing login does not matter; NSE and Yahoo keep answering from the home
+connection.
+
+1. Start the app in production mode: `powershell -ExecutionPolicy Bypass -File scripts\serve.ps1`
+   (add `-Rebuild` after pulling new code). The web app listens on port 3000 on every interface; the API stays on
+   `127.0.0.1:8080`, reachable only by the web app on the same PC.
+2. Install Tailscale on the PC and the phone and sign in to the same account on both.
+3. On the phone open `http://<pc-name>:3000` (the script prints the exact address once Tailscale is installed).
+
+If the phone cannot connect, Windows Firewall is the usual cause: allow Node.js for the network Tailscale uses.
+Never forward port 3000 on the router; anyone could then read the trade plans. The site is only up while the PC is
+on and both windows are open.
+
 ## Free setup
 
 ### Web: Vercel Hobby
